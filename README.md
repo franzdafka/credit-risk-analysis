@@ -1,26 +1,36 @@
-#  Customer Credit Risk Analysis
+# 📊 Customer Credit Risk Analysis
 
-A data analysis project applied to retail banking.
+A end-to-end data science project applied to retail banking.
+Built to simulate real-world credit scoring workflows used at banks like BNP Paribas.
 
-##  Objective
-Identify clients at risk of loan default based on
-their financial profile.
+## 🎯 Objective
+Identify clients at risk of loan default using machine learning,
+business cost analysis, and model explainability.
 
-##  Tech Stack
+## 🛠️ Tech Stack
 - Python 3
-- Pandas
-- Matplotlib
+- Pandas & NumPy
+- Matplotlib & Seaborn
 - Scikit-learn
+- SHAP (model explainability)
+- Streamlit (interactive app)
 
-##  What's Inside
-- Exploratory Data Analysis (EDA)
-- Customer profile visualizations
-- Logistic Regression prediction model
+## 📈 Project Structure
+- `analyse.py` — Full EDA, model training, confusion matrix, cost analysis, SHAP
+- `app.py` — Interactive Streamlit web app for real-time risk prediction
 
-##  Key Findings
-- Average default rate: 30%
-- High-risk clients earn on average 2x less
-- Model successfully predicts default risk
+## 🔍 Key Features
+- ✅ Exploratory Data Analysis (EDA)
+- ✅ Logistic Regression model
+- ✅ Confusion Matrix
+- ✅ Cost of Error simulation (False Negatives vs False Positives)
+- ✅ Profit simulation
+- ✅ SHAP explainability plots
+- ✅ Interactive Streamlit app
 
-##  Author
+## 🚀 Run the App
+pip install -r requirements.txt
+streamlit run app.py
+
+## 👤 Author
 David Chuev — L1 Student, Paris 1 University
