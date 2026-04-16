@@ -1,10 +1,42 @@
 # 🏦 Deployable Fintech Credit Risk Demo
 
-This project is now structured as a **deployable fintech demo** with:
-- A **FastAPI scoring service** (`/predict`, `/health`)
-- A **Streamlit front-end** for underwriting simulations
-- **Docker Compose** setup for one-command local deployment
-- Basic **API tests** for reliability
+This demo uses the **real German Credit dataset** (UCI/OpenML mirror) instead of a synthetic toy sample.
+
+## What's included
+
+- **FastAPI scoring service** (`/predict`, `/health`, `/metrics`)
+- **Streamlit underwriting UI** with API-first scoring and local fallback
+- **Docker Compose** deployment for end-to-end demo startup
+- **Automated API smoke tests**
+
+## Dataset
+
+- Source: German Credit data (`GermanCredit.csv` mirror)
+- Loader behavior:
+  1. Use local cache at `data/GermanCredit.csv` if available
+  2. Otherwise download from: `https://raw.githubusercontent.com/selva86/datasets/master/GermanCredit.csv`
+
+## Model
+
+- Algorithm: Logistic Regression
+- Features used:
+  - `duration`
+  - `amount`
+  - `age`
+  - `installment_rate`
+  - `number_credits`
+  - `people_liable`
+
+## Model metrics
+
+Metrics are computed on an 80/20 stratified split and exposed from the running service:
+
+- **AUC-ROC**: available via `GET /metrics`
+- **Gini coefficient**: `2 * AUC - 1`, available via `GET /metrics`
+
+```bash
+curl http://localhost:8000/metrics
+```
 
 ## Architecture
 
@@ -35,23 +67,23 @@ docker compose up --build
 - API: `http://localhost:8000`
 - Front-end: `http://localhost:8501`
 
-## Example API Request
+## Example prediction request
 
 ```bash
 curl -X POST http://localhost:8000/predict \
   -H "Content-Type: application/json" \
-  -d '{"age":35,"annual_income":40000,"loan_amount":12000}'
+  -d '{
+    "duration": 24,
+    "amount": 5000,
+    "age": 35,
+    "installment_rate": 2,
+    "number_credits": 1,
+    "people_liable": 1
+  }'
 ```
 
-## Run tests
+## Tests
 
 ```bash
 pytest
 ```
-
-## Demo Positioning
-
-This repository can be shown as an MVP for:
-- Embedded lending decision support
-- Risk scoring API prototyping
-- Internal credit analyst dashboard demos

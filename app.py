@@ -1,23 +1,35 @@
 import os
-
 import requests
 import streamlit as st
-
-from credit_model import predict_risk
+from credit_model import get_model_metrics, predict_risk
 
 API_URL = os.getenv("CREDIT_API_URL", "http://localhost:8000")
 
 st.set_page_config(page_title="Credit Risk Analyzer", page_icon="🏦", layout="wide")
-
 st.title("🏦 Fintech Credit Risk Demo")
-st.caption("Production-style demo with Streamlit UI + REST scoring API")
+st.caption("German Credit (real-world dataset) + Logistic Regression")
+
+metrics = get_model_metrics()
+st.sidebar.markdown("### Model Benchmark")
+st.sidebar.write(f"AUC-ROC: **{metrics.auc_roc:.3f}**")
+st.sidebar.write(f"Gini: **{metrics.gini_coefficient:.3f}**")
 
 st.sidebar.header("Client Information")
-age = st.sidebar.slider("Age", 18, 80, 35)
-annual_income = st.sidebar.number_input("Annual Income (€)", 10000, 200000, 40000, step=1000)
-loan_amount = st.sidebar.number_input("Loan Amount (€)", 1000, 50000, 10000, step=500)
+duration = st.sidebar.slider("Loan Duration (months)", 4, 72, 24)
+amount = st.sidebar.number_input("Loan Amount (DM)", 250, 20000, 5000, step=100)
+age = st.sidebar.slider("Age", 18, 75, 35)
+installment_rate = st.sidebar.slider("Installment Rate (1-4)", 1, 4, 2)
+number_credits = st.sidebar.slider("Number of Existing Credits", 1, 4, 1)
+people_liable = st.sidebar.slider("People Liable", 1, 2, 1)
 
-payload = {"age": age, "annual_income": annual_income, "loan_amount": loan_amount}
+payload = {
+    "duration": duration,
+    "amount": amount,
+    "age": age,
+    "installment_rate": installment_rate,
+    "number_credits": number_credits,
+    "people_liable": people_liable,
+}
 
 
 def score_client() -> dict:
@@ -40,7 +52,6 @@ def score_client() -> dict:
 
 if st.button("Evaluate Application", type="primary"):
     scored = score_client()
-
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Default Probability", f"{scored['probability_default'] * 100:.1f}%")
@@ -48,12 +59,10 @@ if st.button("Evaluate Application", type="primary"):
         st.metric("Decision", scored["decision"].upper())
     with col3:
         st.metric("Risk Band", scored["risk_band"].upper())
-
     if scored["decision"] == "reject":
         st.error("⚠️ HIGH RISK — Loan not recommended")
     else:
         st.success("✅ ACCEPTABLE RISK — Loan recommended")
-
     st.write("Scoring source:", scored["source"])
     st.json(payload)
 else:
