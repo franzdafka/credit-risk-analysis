@@ -46,6 +46,10 @@ curl http://localhost:8000/metrics
 - `docker-compose.yml` — runs API + front-end together
 - `tests/test_api.py` — smoke tests for health and predict endpoints
 
+## Screenshot
+
+![UI](docs/screenshot.png)
+
 ## Quick Start (Local Python)
 
 ```bash
