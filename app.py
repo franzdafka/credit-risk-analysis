@@ -1,14 +1,11 @@
 import os
-
 import requests
 import streamlit as st
-
 from credit_model import get_model_metrics, predict_risk
 
 API_URL = os.getenv("CREDIT_API_URL", "http://localhost:8000")
 
 st.set_page_config(page_title="Credit Risk Analyzer", page_icon="🏦", layout="wide")
-
 st.title("🏦 Fintech Credit Risk Demo")
 st.caption("German Credit (real-world dataset) + Logistic Regression")
 
@@ -55,7 +52,6 @@ def score_client() -> dict:
 
 if st.button("Evaluate Application", type="primary"):
     scored = score_client()
-
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Default Probability", f"{scored['probability_default'] * 100:.1f}%")
@@ -63,12 +59,10 @@ if st.button("Evaluate Application", type="primary"):
         st.metric("Decision", scored["decision"].upper())
     with col3:
         st.metric("Risk Band", scored["risk_band"].upper())
-
     if scored["decision"] == "reject":
         st.error("⚠️ HIGH RISK — Loan not recommended")
     else:
         st.success("✅ ACCEPTABLE RISK — Loan recommended")
-
     st.write("Scoring source:", scored["source"])
     st.json(payload)
 else:

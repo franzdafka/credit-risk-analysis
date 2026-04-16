@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
-
 from credit_model import get_model_metrics, predict_risk
 
 app = FastAPI(title="Fintech Credit Risk API", version="1.1.0")

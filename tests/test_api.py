@@ -1,7 +1,5 @@
 from fastapi.testclient import TestClient
-
 from api import app
-
 
 client = TestClient(app)
 
@@ -30,7 +28,6 @@ def test_predict_returns_decision() -> None:
         "people_liable": 1,
     }
     response = client.post("/predict", json=payload)
-
     assert response.status_code == 200
     body = response.json()
     assert 0 <= body["probability_default"] <= 1

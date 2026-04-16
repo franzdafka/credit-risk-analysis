@@ -1,20 +1,23 @@
 # 🏦 Deployable Fintech Credit Risk Demo
 
-This demo now uses the **real German Credit dataset** (UCI/OpenML mirror) instead of a synthetic toy sample.
+This demo uses the **real German Credit dataset** (UCI/OpenML mirror) instead of a synthetic toy sample.
 
-## What’s included
+## What's included
+
 - **FastAPI scoring service** (`/predict`, `/health`, `/metrics`)
 - **Streamlit underwriting UI** with API-first scoring and local fallback
 - **Docker Compose** deployment for end-to-end demo startup
 - **Automated API smoke tests**
 
 ## Dataset
+
 - Source: German Credit data (`GermanCredit.csv` mirror)
 - Loader behavior:
   1. Use local cache at `data/GermanCredit.csv` if available
   2. Otherwise download from: `https://raw.githubusercontent.com/selva86/datasets/master/GermanCredit.csv`
 
 ## Model
+
 - Algorithm: Logistic Regression
 - Features used:
   - `duration`
@@ -25,15 +28,23 @@ This demo now uses the **real German Credit dataset** (UCI/OpenML mirror) instea
   - `people_liable`
 
 ## Model metrics
+
 Metrics are computed on an 80/20 stratified split and exposed from the running service:
+
 - **AUC-ROC**: available via `GET /metrics`
 - **Gini coefficient**: `2 * AUC - 1`, available via `GET /metrics`
-
-You can retrieve them directly:
 
 ```bash
 curl http://localhost:8000/metrics
 ```
+
+## Architecture
+
+- `credit_model.py` — shared model training + risk inference logic
+- `api.py` — REST API used by front-end or external systems
+- `app.py` — Streamlit UI (calls API; auto-fallback to local model)
+- `docker-compose.yml` — runs API + front-end together
+- `tests/test_api.py` — smoke tests for health and predict endpoints
 
 ## Quick Start (Local Python)
 
