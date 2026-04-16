@@ -2,3 +2,12 @@ pandas
 numpy
 scikit-learn
 streamlit
+fastapi
+uvicorn
+requests
+pydantic
+matplotlib
+seaborn
+shap
+pytest
+httpx
