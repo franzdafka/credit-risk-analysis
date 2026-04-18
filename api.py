@@ -1,7 +1,17 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+codex/update-api-and-readme-for-credit-risk-assessment-hblksp
+from credit_model import (
+    CategoryValidationError,
+    explain_user_risk,
+    get_model_version,
+    predict_risk,
+    validate_and_normalize_categories,
+)
+ 
 from credit_model import explain_user_risk, get_model_version, predict_risk
+main
 
 app = FastAPI(title="Credit Risk Assessment Service", version="2.0.0")
 
@@ -33,7 +43,21 @@ def health() -> dict:
 
 @app.post("/predict", response_model=CreditResponse)
 def predict(request: CreditRequest) -> CreditResponse:
-    prediction = predict_risk(request.model_dump())
+    payload = request.model_dump()
+    try:
+        normalized_payload = validate_and_normalize_categories(payload)
+    except CategoryValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Invalid category value.",
+                "field": exc.field,
+                "received": exc.value,
+                "allowed_values": exc.allowed,
+            },
+        ) from exc
+
+    prediction = predict_risk(normalized_payload)
     decision = "reject" if prediction.predicted_default else "approve"
     return CreditResponse(
         probability_default=prediction.probability_default,
