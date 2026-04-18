@@ -47,6 +47,7 @@ def test_explain_returns_top_3_positive_and_negative_features() -> None:
     assert len(body["top_negative"]) == 3
 
 
+codex/update-api-and-readme-for-credit-risk-assessment-hblksp
 def test_predict_rejects_unknown_category_with_422() -> None:
     payload = _base_payload()
     payload["credit_history"] = "totally unknown category"
@@ -67,6 +68,8 @@ def test_predict_accepts_known_alias_category_values() -> None:
     assert 0 <= response.json()["probability_default"] <= 1
 
 
+    
+main
 # Boundary tests
 
 def test_predict_handles_extreme_values() -> None:

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+codex/update-api-and-readme-for-credit-risk-assessment-hblksp
 import logging
 import re
+main
 from typing import Any, Dict
 
 import joblib
@@ -86,6 +88,7 @@ class ModelBundle:
     reference_frame: pd.DataFrame
 
 
+codex/update-api-and-readme-for-credit-risk-assessment-hblksp
 @dataclass(frozen=True)
 class CategoryValidationError(Exception):
     field: str
@@ -93,6 +96,8 @@ class CategoryValidationError(Exception):
     allowed: list[str]
 
 
+ 
+main
 def _load_german_credit_dataset() -> pd.DataFrame:
     if LOCAL_DATASET_PATH.exists():
         return pd.read_csv(LOCAL_DATASET_PATH)
@@ -291,6 +296,7 @@ def _load_serialized_model() -> ModelBundle:
     )
 
 
+codex/update-api-and-readme-for-credit-risk-assessment-hblksp
 def _normalize_label(value: str) -> str:
     cleaned = value.strip().lower()
     cleaned = cleaned.replace("years", "yrs").replace("year", "yr")
@@ -315,11 +321,15 @@ def get_allowed_request_categories() -> dict[str, list[str]]:
 def validate_and_normalize_categories(payload: Dict[str, float | str]) -> Dict[str, float | str]:
     normalized = dict(payload)
     allowed_map = get_allowed_request_categories()
+    
+_BUNDLE: ModelBundle | None = None
+main
 
     for field in REQUEST_CATEGORY_FIELDS:
         raw_value = str(normalized.get(field, "")).strip()
         alias_value = _CATEGORY_ALIASES.get(field, {}).get(raw_value, raw_value)
 
+codex/update-api-and-readme-for-credit-risk-assessment-hblksp
         allowed_values = allowed_map[field]
         allowed_by_normalized = {_normalize_label(value): value for value in allowed_values}
         normalized_key = _normalize_label(alias_value)
@@ -340,6 +350,8 @@ def validate_and_normalize_categories(payload: Dict[str, float | str]) -> Dict[s
 _BUNDLE: ModelBundle | None = None
 
 
+
+main
 def _get_bundle() -> ModelBundle:
     global _BUNDLE
     if _BUNDLE is None:
@@ -367,6 +379,7 @@ def predict_risk(payload: Dict[str, float]) -> RiskPrediction:
 
     features = _feature_engineering(base)[FEATURE_COLUMNS]
     bundle = _get_bundle()
+codex/update-api-and-readme-for-credit-risk-assessment-hblksp
     preprocessor = bundle.model.named_steps["preprocessor"]
     transformed = preprocessor.transform(features)
     nnz = int(getattr(transformed, "nnz", np.count_nonzero(transformed)))
@@ -389,11 +402,18 @@ def predict_risk(payload: Dict[str, float]) -> RiskPrediction:
 
     classifier = bundle.model.named_steps["classifier"]
     prob_good = float(classifier.predict_proba(transformed)[0][1])
+
+    prob_good = float(bundle.model.predict_proba(features)[0][1])
+ main
     probability_default = 1 - prob_good
 
     # Conservative monotonic calibration: higher income should generally reduce default risk.
     income = float(base.get("income", pd.Series([4000.0])).iloc[0])
+codex/update-api-and-readme-for-credit-risk-assessment-hblksp
     income_adjustment = np.clip(4000.0 / max(income, 1.0), 0.7, 1.6)
+ 
+    income_adjustment = np.clip(10000.0 / max(income, 1.0), 0.05, 8.0)
+ main
     probability_default = float(np.clip(probability_default * income_adjustment, 0.0, 1.0))
 
     predicted_default = probability_default >= 0.5
