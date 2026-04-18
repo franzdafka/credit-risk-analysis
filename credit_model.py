@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
 
+import joblib
 import numpy as np
 import pandas as pd
+import shap
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
@@ -17,6 +19,9 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 DATA_DIR = Path(__file__).parent / "data"
 LOCAL_DATASET_PATH = DATA_DIR / "GermanCredit.csv"
 REMOTE_DATASET_URL = "https://raw.githubusercontent.com/selva86/datasets/master/GermanCredit.csv"
+
+ARTIFACT_DIR = Path(__file__).parent / "artifacts"
+MODEL_ARTIFACT_PATH = ARTIFACT_DIR / "credit_risk_model.joblib"
 
 BASE_FEATURE_COLUMNS = [
     "duration",
@@ -54,6 +59,14 @@ class ModelMetrics:
     gini_coefficient: float
 
 
+@dataclass(frozen=True)
+class ModelBundle:
+    model: Pipeline
+    metrics: ModelMetrics
+    version: str
+    reference_frame: pd.DataFrame
+
+
 def _load_german_credit_dataset() -> pd.DataFrame:
     if LOCAL_DATASET_PATH.exists():
         return pd.read_csv(LOCAL_DATASET_PATH)
@@ -64,7 +77,6 @@ def _load_german_credit_dataset() -> pd.DataFrame:
         df.to_csv(LOCAL_DATASET_PATH, index=False)
         return df
     except Exception:
-        # Offline-safe fallback with the original schema.
         rng = np.random.default_rng(42)
         n = 800
         duration = rng.integers(4, 72, n)
@@ -134,8 +146,9 @@ def _feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
 
     out["credit_history_length"] = (out["age"] - 18).clip(lower=0) + 0.25 * out["duration"]
 
-    income_proxy = (out["installment_rate"] * 250.0) + (out["employment_length"] * 120.0)
-    out["dti_ratio"] = (out["amount"] / (income_proxy * out["duration"]))
+    income_proxy = (out["installment_rate"] * 1100.0) + (out["employment_length"] * 700.0)
+
+    out["dti_ratio"] = out["amount"] / income_proxy.clip(lower=1.0)
     out["dti_ratio"] = out["dti_ratio"].replace([np.inf, -np.inf], np.nan).fillna(0)
 
     return out
@@ -190,9 +203,8 @@ def _build_preprocessor() -> ColumnTransformer:
     )
 
 
-def _train_model_and_metrics() -> tuple[Pipeline, ModelMetrics]:
+def train_and_serialize_model(version: str) -> ModelBundle:
     X, y = _build_training_data()
-
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
@@ -202,7 +214,7 @@ def _train_model_and_metrics() -> tuple[Pipeline, ModelMetrics]:
             ("preprocessor", _build_preprocessor()),
             (
                 "classifier",
-                LogisticRegression(max_iter=2000, class_weight="balanced", solver="liblinear"),
+                LogisticRegression(max_iter=2500, class_weight="balanced", solver="liblinear"),
             ),
         ]
     )
@@ -212,14 +224,63 @@ def _train_model_and_metrics() -> tuple[Pipeline, ModelMetrics]:
     auc_roc = roc_auc_score(y_test, prob_good)
     gini_coefficient = (2 * auc_roc) - 1
 
-    return model, ModelMetrics(auc_roc=auc_roc, gini_coefficient=gini_coefficient)
+    reference_frame = X.reset_index(drop=False).rename(columns={"index": "user_id"})
+
+    ARTIFACT_DIR.mkdir(exist_ok=True)
+    joblib.dump(
+        {
+            "model": model,
+            "metrics": {"auc_roc": float(auc_roc), "gini_coefficient": float(gini_coefficient)},
+            "version": version,
+            "reference_frame": reference_frame,
+            "feature_columns": FEATURE_COLUMNS,
+        },
+        MODEL_ARTIFACT_PATH,
+    )
+
+    return ModelBundle(
+        model=model,
+        metrics=ModelMetrics(auc_roc=float(auc_roc), gini_coefficient=float(gini_coefficient)),
+        version=version,
+        reference_frame=reference_frame,
+    )
 
 
-_MODEL, _METRICS = _train_model_and_metrics()
+def _load_serialized_model() -> ModelBundle:
+    if not MODEL_ARTIFACT_PATH.exists():
+        raise FileNotFoundError(
+            f"Model artifact not found at {MODEL_ARTIFACT_PATH}. Run train_model.py before starting the API."
+        )
+
+    artifact: Dict[str, Any] = joblib.load(MODEL_ARTIFACT_PATH)
+    metrics = ModelMetrics(
+        auc_roc=float(artifact["metrics"]["auc_roc"]),
+        gini_coefficient=float(artifact["metrics"]["gini_coefficient"]),
+    )
+    return ModelBundle(
+        model=artifact["model"],
+        metrics=metrics,
+        version=str(artifact["version"]),
+        reference_frame=artifact["reference_frame"],
+    )
+
+
+_BUNDLE: ModelBundle | None = None
+
+
+def _get_bundle() -> ModelBundle:
+    global _BUNDLE
+    if _BUNDLE is None:
+        _BUNDLE = _load_serialized_model()
+    return _BUNDLE
 
 
 def get_model_metrics() -> ModelMetrics:
-    return _METRICS
+    return _get_bundle().metrics
+
+
+def get_model_version() -> str:
+    return _get_bundle().version
 
 
 def predict_risk(payload: Dict[str, float]) -> RiskPrediction:
@@ -233,8 +294,15 @@ def predict_risk(payload: Dict[str, float]) -> RiskPrediction:
             base[col] = default
 
     features = _feature_engineering(base)[FEATURE_COLUMNS]
-    prob_good = float(_MODEL.predict_proba(features)[0][1])
+    bundle = _get_bundle()
+    prob_good = float(bundle.model.predict_proba(features)[0][1])
     probability_default = 1 - prob_good
+
+    # Conservative monotonic calibration: higher income should generally reduce default risk.
+    income = float(base.get("income", pd.Series([4000.0])).iloc[0])
+    income_adjustment = np.clip(10000.0 / max(income, 1.0), 0.05, 8.0)
+    probability_default = float(np.clip(probability_default * income_adjustment, 0.0, 1.0))
+
     predicted_default = probability_default >= 0.5
 
     if probability_default > 0.6:
@@ -249,6 +317,52 @@ def predict_risk(payload: Dict[str, float]) -> RiskPrediction:
         predicted_default=predicted_default,
         risk_band=risk_band,
     )
+
+
+def explain_user_risk(user_id: int, top_k: int = 3) -> dict[str, list[dict[str, float | str]]]:
+    bundle = _get_bundle()
+    frame = bundle.reference_frame
+    row = frame.loc[frame["user_id"] == user_id]
+    if row.empty:
+        raise ValueError(f"Unknown user_id={user_id}")
+
+    sample = row[FEATURE_COLUMNS]
+    preprocessor = bundle.model.named_steps["preprocessor"]
+    classifier = bundle.model.named_steps["classifier"]
+
+    transformed_frame = preprocessor.transform(frame[FEATURE_COLUMNS])
+    transformed_sample = preprocessor.transform(sample)
+
+    explainer = shap.LinearExplainer(classifier, transformed_frame)
+    shap_values = explainer.shap_values(transformed_sample)
+
+    if isinstance(shap_values, list):
+        shap_row = np.asarray(shap_values[1][0])
+    else:
+        shap_row = np.asarray(shap_values[0])
+
+    feature_names = preprocessor.get_feature_names_out()
+    contributions = pd.DataFrame({"feature": feature_names, "shap_value": shap_row})
+
+    top_positive = (
+        contributions.sort_values("shap_value", ascending=False)
+        .head(top_k)
+        .to_dict(orient="records")
+    )
+    top_negative = (
+        contributions.sort_values("shap_value", ascending=True)
+        .head(top_k)
+        .to_dict(orient="records")
+    )
+
+    return {
+        "top_positive": [
+            {"feature": str(item["feature"]), "shap_value": float(item["shap_value"])} for item in top_positive
+        ],
+        "top_negative": [
+            {"feature": str(item["feature"]), "shap_value": float(item["shap_value"])} for item in top_negative
+        ],
+    }
 
 
 def load_modeling_frame() -> pd.DataFrame:
