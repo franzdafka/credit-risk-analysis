@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+
 from api import app
 
 client = TestClient(app)
@@ -26,6 +27,9 @@ def test_predict_returns_decision() -> None:
         "installment_rate": 2,
         "number_credits": 1,
         "people_liable": 1,
+        "purpose": "car",
+        "credit_history": "existing paid",
+        "employment_duration": "1 <= ... < 4 yrs",
     }
     response = client.post("/predict", json=payload)
     assert response.status_code == 200
