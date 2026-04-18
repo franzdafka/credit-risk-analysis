@@ -1,16 +1,18 @@
 import os
+
 import requests
 import streamlit as st
+
 from credit_model import get_model_metrics, predict_risk
 
 API_URL = os.getenv("CREDIT_API_URL", "http://localhost:8000")
 
 st.set_page_config(page_title="Credit Risk Analyzer", page_icon="🏦", layout="wide")
 st.title("🏦 Fintech Credit Risk Demo")
-st.caption("German Credit (real-world dataset) + Logistic Regression")
+st.caption("German Credit + feature engineering + class-balanced logistic baseline")
 
 metrics = get_model_metrics()
-st.sidebar.markdown("### Model Benchmark")
+st.sidebar.markdown("### Baseline Model")
 st.sidebar.write(f"AUC-ROC: **{metrics.auc_roc:.3f}**")
 st.sidebar.write(f"Gini: **{metrics.gini_coefficient:.3f}**")
 
@@ -21,6 +23,20 @@ age = st.sidebar.slider("Age", 18, 75, 35)
 installment_rate = st.sidebar.slider("Installment Rate (1-4)", 1, 4, 2)
 number_credits = st.sidebar.slider("Number of Existing Credits", 1, 4, 1)
 people_liable = st.sidebar.slider("People Liable", 1, 2, 1)
+purpose = st.sidebar.selectbox("Loan Purpose", ["car", "furniture/equipment", "business", "education"])
+credit_history = st.sidebar.selectbox(
+    "Credit History",
+    [
+        "critical/other existing credit",
+        "existing paid",
+        "all paid",
+        "delay in paying off in the past",
+    ],
+)
+employment_duration = st.sidebar.selectbox(
+    "Employment Duration",
+    ["< 1 yr", "1 <= ... < 4 yrs", "4 <= ... < 7 yrs", ">= 7 yrs"],
+)
 
 payload = {
     "duration": duration,
@@ -29,6 +45,9 @@ payload = {
     "installment_rate": installment_rate,
     "number_credits": number_credits,
     "people_liable": people_liable,
+    "purpose": purpose,
+    "credit_history": credit_history,
+    "employment_duration": employment_duration,
 }
 
 

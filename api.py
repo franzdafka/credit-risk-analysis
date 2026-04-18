@@ -1,8 +1,9 @@
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
+
 from credit_model import get_model_metrics, predict_risk
 
-app = FastAPI(title="Fintech Credit Risk API", version="1.1.0")
+app = FastAPI(title="Fintech Credit Risk API", version="1.2.0")
 
 
 class CreditRequest(BaseModel):
@@ -12,6 +13,9 @@ class CreditRequest(BaseModel):
     installment_rate: int = Field(ge=1, le=4)
     number_credits: int = Field(ge=1, le=4)
     people_liable: int = Field(ge=1, le=2)
+    purpose: str = Field(default="furniture/equipment")
+    credit_history: str = Field(default="existing paid")
+    employment_duration: str = Field(default="1 <= ... < 4 yrs")
 
 
 class CreditResponse(BaseModel):

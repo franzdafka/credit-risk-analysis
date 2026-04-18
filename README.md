@@ -1,56 +1,68 @@
 # 🏦 Deployable Fintech Credit Risk Demo
 
-This demo uses the **real German Credit dataset** (UCI/OpenML mirror) instead of a synthetic toy sample.
+This project now includes a **data foundation + benchmark + explainability stack** for credit risk modeling.
 
-## What's included
+## Level 1 — Data Foundation
+
+- Dataset: German Credit dataset (`GermanCredit.csv`) with local-cache-first loading.
+- Feature engineering added:
+  - `dti_ratio`
+  - `credit_history_length`
+  - `number_of_delinquencies`
+  - `employment_length`
+  - `loan_purpose`
+- Professional EDA script: `eda.py` (exports figures + missing-value strategy report).
+
+### Run EDA
+
+```bash
+python eda.py
+```
+
+Outputs:
+- `reports/figures/target_imbalance.png`
+- `reports/figures/feature_distributions.png`
+- `reports/figures/correlation_matrix.png`
+- `reports/missing_value_report.csv`
+
+## Level 2 — Model Quality & Explainability
+
+`benchmark_models.py` performs model comparison and explainability:
+
+- Logistic Regression (baseline)
+- Random Forest
+- XGBoost (if installed) or gradient-boosting fallback
+
+Metrics:
+- AUC-ROC
+- Precision-Recall AUC + PR curves
+- Gini coefficient
+
+Imbalance handling:
+- `class_weight='balanced'` in baseline/tree models
+
+SHAP explainability:
+- Global importance beeswarm: `reports/figures/shap_summary_beeswarm.png`
+- Individual waterfall explanation: `reports/figures/shap_waterfall_first_prediction.png`
+
+### Run benchmarking
+
+```bash
+python benchmark_models.py
+```
+
+Outputs:
+- `reports/benchmark_results.csv`
+- `reports/figures/pr_curve_*.png`
+- SHAP plots under `reports/figures/`
+
+## API + UI
 
 - **FastAPI scoring service** (`/predict`, `/health`, `/metrics`)
 - **Streamlit underwriting UI** with API-first scoring and local fallback
-- **Docker Compose** deployment for end-to-end demo startup
-- **Automated API smoke tests**
+- **Docker Compose** deployment
 
-## Dataset
-
-- Source: German Credit data (`GermanCredit.csv` mirror)
-- Loader behavior:
-  1. Use local cache at `data/GermanCredit.csv` if available
-  2. Otherwise download from: `https://raw.githubusercontent.com/selva86/datasets/master/GermanCredit.csv`
-
-## Model
-
-- Algorithm: Logistic Regression
-- Features used:
-  - `duration`
-  - `amount`
-  - `age`
-  - `installment_rate`
-  - `number_credits`
-  - `people_liable`
-
-## Model metrics
-
-Metrics are computed on an 80/20 stratified split and exposed from the running service:
-
-- **AUC-ROC**: available via `GET /metrics`
-- **Gini coefficient**: `2 * AUC - 1`, available via `GET /metrics`
-
-```bash
-curl http://localhost:8000/metrics
-```
-
-## Architecture
-
-- `credit_model.py` — shared model training + risk inference logic
-- `api.py` — REST API used by front-end or external systems
-- `app.py` — Streamlit UI (calls API; auto-fallback to local model)
-- `docker-compose.yml` — runs API + front-end together
-- `tests/test_api.py` — smoke tests for health and predict endpoints
-
-## Screenshot
-
-![UI](docs/screenshot.png)
-
-## Quick Start (Local Python)
+### Quick Start
 
 ```bash
 pip install -r requirements.txt
@@ -59,34 +71,7 @@ uvicorn api:app --reload --port 8000
 streamlit run app.py
 ```
 
-- API docs: `http://localhost:8000/docs`
-- Front-end: `http://localhost:8501`
-
-## Quick Start (Docker Compose)
-
-```bash
-docker compose up --build
-```
-
-- API: `http://localhost:8000`
-- Front-end: `http://localhost:8501`
-
-## Example prediction request
-
-```bash
-curl -X POST http://localhost:8000/predict \
-  -H "Content-Type: application/json" \
-  -d '{
-    "duration": 24,
-    "amount": 5000,
-    "age": 35,
-    "installment_rate": 2,
-    "number_credits": 1,
-    "people_liable": 1
-  }'
-```
-
-## Tests
+Run tests:
 
 ```bash
 pytest
