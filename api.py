@@ -1,14 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from credit_model import get_model_metrics, predict_risk
+from credit_model import explain_user_risk, get_model_version, predict_risk
 
-app = FastAPI(title="Fintech Credit Risk API", version="1.2.0")
+app = FastAPI(title="Credit Risk Assessment Service", version="2.0.0")
 
 
 class CreditRequest(BaseModel):
     duration: int = Field(ge=4, le=72)
-    amount: float = Field(gt=0)
+    amount: float = Field(gt=0, description="Loan amount")
+    income: float = Field(gt=0, description="Applicant monthly income")
     age: int = Field(ge=18, le=100)
     installment_rate: int = Field(ge=1, le=4)
     number_credits: int = Field(ge=1, le=4)
@@ -25,23 +26,9 @@ class CreditResponse(BaseModel):
     risk_band: str
 
 
-class MetricsResponse(BaseModel):
-    auc_roc: float
-    gini_coefficient: float
-
-
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok"}
-
-
-@app.get("/metrics", response_model=MetricsResponse)
-def metrics() -> MetricsResponse:
-    model_metrics = get_model_metrics()
-    return MetricsResponse(
-        auc_roc=model_metrics.auc_roc,
-        gini_coefficient=model_metrics.gini_coefficient,
-    )
+    return {"status": "ok", "model_version": get_model_version()}
 
 
 @app.post("/predict", response_model=CreditResponse)
@@ -54,3 +41,13 @@ def predict(request: CreditRequest) -> CreditResponse:
         decision=decision,
         risk_band=prediction.risk_band,
     )
+
+
+@app.get("/explain")
+def explain(user_id: int) -> dict:
+    try:
+        explanation = explain_user_risk(user_id=user_id, top_k=3)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"user_id": user_id, **explanation}
