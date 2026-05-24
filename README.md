@@ -78,6 +78,17 @@ Run tests locally:
 ```bash
 pytest tests/ -v
 
+## CI/CD
+
+The repository includes a GitHub Actions CI pipeline that runs on every push and pull request to `main`.
+
+The pipeline:
+- installs Python dependencies
+- trains the model artifact
+- runs the API test suite
+
+This ensures the model service is reproducible in a clean environment, not only on a local machine.
+
 ## Example Requests
 
 ### Predict
