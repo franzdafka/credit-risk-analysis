@@ -1,31 +1,20 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel, Field
+from credit_model import predict_risk, get_model_version, get_model_metrics
 
-from credit_model import (
-    CategoryValidationError,
-    explain_user_risk,
-    get_model_version,
-    predict_risk,
-    validate_and_normalize_categories,
-)
- 
-from credit_model import explain_user_risk, get_model_version, predict_risk
-
-app = FastAPI(title="Credit Risk Assessment Service", version="2.0.0")
-
+app = FastAPI(title="Fintech Credit Risk API", version="1.0.0")
 
 class CreditRequest(BaseModel):
-    duration: int = Field(ge=4, le=72)
-    amount: float = Field(gt=0, description="Loan amount")
-    income: float = Field(gt=0, description="Applicant monthly income")
+    duration: int = Field(ge=1, le=120)
+    amount: float = Field(gt=0)
+    income: float = Field(gt=0)
     age: int = Field(ge=18, le=100)
     installment_rate: int = Field(ge=1, le=4)
-    number_credits: int = Field(ge=1, le=4)
+    number_credits: int = Field(ge=1, le=10)
     people_liable: int = Field(ge=1, le=2)
-    purpose: str = Field(default="furniture/equipment")
-    credit_history: str = Field(default="existing paid")
-    employment_duration: str = Field(default="1 <= ... < 4 yrs")
-
+    purpose: str = "car"
+    credit_history: str = "existing paid"
+    employment_duration: str = "1 <= ... < 4 yrs"
 
 class CreditResponse(BaseModel):
     probability_default: float
@@ -33,29 +22,13 @@ class CreditResponse(BaseModel):
     decision: str
     risk_band: str
 
-
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "model_version": get_model_version()}
 
-
 @app.post("/predict", response_model=CreditResponse)
 def predict(request: CreditRequest) -> CreditResponse:
-    payload = request.model_dump()
-    try:
-        normalized_payload = validate_and_normalize_categories(payload)
-    except CategoryValidationError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "Invalid category value.",
-                "field": exc.field,
-                "received": exc.value,
-                "allowed_values": exc.allowed,
-            },
-        ) from exc
-
-    prediction = predict_risk(normalized_payload)
+    prediction = predict_risk(request.model_dump())
     decision = "reject" if prediction.predicted_default else "approve"
     return CreditResponse(
         probability_default=prediction.probability_default,
@@ -63,13 +36,3 @@ def predict(request: CreditRequest) -> CreditResponse:
         decision=decision,
         risk_band=prediction.risk_band,
     )
-
-
-@app.get("/explain")
-def explain(user_id: int) -> dict:
-    try:
-        explanation = explain_user_risk(user_id=user_id, top_k=3)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    return {"user_id": user_id, **explanation}
