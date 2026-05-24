@@ -316,22 +316,29 @@ def get_allowed_request_categories() -> dict[str, list[str]]:
 def validate_and_normalize_categories(payload: Dict[str, float | str]) -> Dict[str, float | str]:
     normalized = dict(payload)
     allowed_map = get_allowed_request_categories()
-    
 
     for field in REQUEST_CATEGORY_FIELDS:
         raw_value = str(normalized.get(field, "")).strip()
-        alias_value = _CATEGORY_ALIASES.get(field, {}).get(raw_value, raw_value)
-
         allowed_values = allowed_map[field]
         allowed_by_normalized = {_normalize_label(value): value for value in allowed_values}
-        normalized_key = _normalize_label(alias_value)
 
+        raw_key = _normalize_label(raw_value)
+        if raw_value in allowed_values:
+            normalized[field] = raw_value
+            continue
+
+        if raw_key in allowed_by_normalized:
+            normalized[field] = allowed_by_normalized[raw_key]
+            continue
+
+        alias_value = _CATEGORY_ALIASES.get(field, {}).get(raw_value, raw_value)
+        alias_key = _normalize_label(alias_value)
         if alias_value in allowed_values:
             normalized[field] = alias_value
             continue
 
-        if normalized_key in allowed_by_normalized:
-            normalized[field] = allowed_by_normalized[normalized_key]
+        if alias_key in allowed_by_normalized:
+            normalized[field] = allowed_by_normalized[alias_key]
             continue
 
         raise CategoryValidationError(field=field, value=raw_value, allowed=allowed_values)
