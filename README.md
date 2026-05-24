@@ -1,5 +1,7 @@
 # Credit Risk Assessment Service
 
+![CI](https://github.com/franzdafka/credit-risk-analysis/actions/workflows/ci.yml/badge.svg)
+
 Production-oriented credit scoring service built with **FastAPI**, a serialized **scikit-learn** model artifact, and SHAP-based decision explanations.
 
 ## Service Overview
@@ -70,9 +72,11 @@ Tests are written in `tests/test_api.py` and include:
 
 Run tests:
 
+```md
+Run tests locally:
+
 ```bash
-pytest
-```
+pytest tests/ -v
 
 ## Example Requests
 
