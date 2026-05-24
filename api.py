@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-codex/update-api-and-readme-for-credit-risk-assessment-hblksp
 from credit_model import (
     CategoryValidationError,
     explain_user_risk,
@@ -11,7 +10,6 @@ from credit_model import (
 )
  
 from credit_model import explain_user_risk, get_model_version, predict_risk
-main
 
 app = FastAPI(title="Credit Risk Assessment Service", version="2.0.0")
 
