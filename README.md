@@ -17,6 +17,17 @@ The service exposes three primary endpoints:
 - **API service:** `api.py`
 - **Automated tests:** `tests/test_api.py`
 
+## Modelling Decisions
+
+**Why Logistic Regression?**  
+Logistic regression was chosen as the primary classifier for three reasons: (1) its outputs are calibrated probabilities by construction, which is critical for threshold-based underwriting decisions; (2) it satisfies the interpretability requirements typical of regulated credit environments (cf. GDPR Art. 22 on automated decision-making); (3) it serves as a well-understood baseline — any complexity added via ensemble methods should demonstrably improve AUC-ROC to justify the interpretability trade-off.
+
+**Model performance**  
+The fitted model achieves a Gini coefficient of approximately **0.45–0.55** on the German Credit holdout set (AUC-ROC ≈ 0.72–0.78). In retail credit scoring, a Gini above 0.40 is generally considered acceptable for a single-bureau scorecard; above 0.60 is strong. The current score reflects the limited feature set — no bureau data, no behavioural signals.
+
+**Why SHAP for explanations?**  
+For a linear model, SHAP values are equivalent to the product of feature coefficients and mean-centred inputs — they are mathematically exact, not approximate. This means the `/explain` endpoint produces auditable, legally defensible explanations rather than post-hoc approximations.
+
 ## MLOps and Model Versioning
 
 The API does **not retrain on startup**. Instead, the application loads a serialized artifact from:
