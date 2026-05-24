@@ -1,6 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from credit_model import predict_risk, get_model_version, get_model_metrics
+from credit_model import predict_risk, get_model_version, explain_user_risk, validate_and_normalize_categories, CategoryValidationError
 
 app = FastAPI(title="Fintech Credit Risk API", version="1.0.0")
 
@@ -28,7 +28,11 @@ def health() -> dict:
 
 @app.post("/predict", response_model=CreditResponse)
 def predict(request: CreditRequest) -> CreditResponse:
-    prediction = predict_risk(request.model_dump())
+    try:
+        payload = validate_and_normalize_categories(request.model_dump())
+    except CategoryValidationError as e:
+        raise HTTPException(status_code=422, detail={"field": e.field, "value": e.value, "allowed": e.allowed})
+    prediction = predict_risk(payload)
     decision = "reject" if prediction.predicted_default else "approve"
     return CreditResponse(
         probability_default=prediction.probability_default,
@@ -36,3 +40,10 @@ def predict(request: CreditRequest) -> CreditResponse:
         decision=decision,
         risk_band=prediction.risk_band,
     )
+
+@app.get("/explain")
+def explain(user_id: int) -> dict:
+    try:
+        return explain_user_risk(user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
