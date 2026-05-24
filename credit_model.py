@@ -394,7 +394,6 @@ def predict_risk(payload: Dict[str, float]) -> RiskPrediction:
     prob_good = float(classifier.predict_proba(transformed)[0][1])
 
     prob_good = float(bundle.model.predict_proba(features)[0][1])
- main
     probability_default = 1 - prob_good
 
     # Conservative monotonic calibration: higher income should generally reduce default risk.
@@ -402,7 +401,6 @@ def predict_risk(payload: Dict[str, float]) -> RiskPrediction:
     income_adjustment = np.clip(4000.0 / max(income, 1.0), 0.7, 1.6)
  
     income_adjustment = np.clip(10000.0 / max(income, 1.0), 0.05, 8.0)
- main
     probability_default = float(np.clip(probability_default * income_adjustment, 0.0, 1.0))
 
     predicted_default = probability_default >= 0.5
