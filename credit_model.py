@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-codex/update-api-and-readme-for-credit-risk-assessment-hblksp
 import logging
 import re
 main
@@ -88,7 +87,6 @@ class ModelBundle:
     reference_frame: pd.DataFrame
 
 
-codex/update-api-and-readme-for-credit-risk-assessment-hblksp
 @dataclass(frozen=True)
 class CategoryValidationError(Exception):
     field: str
@@ -296,7 +294,6 @@ def _load_serialized_model() -> ModelBundle:
     )
 
 
-codex/update-api-and-readme-for-credit-risk-assessment-hblksp
 def _normalize_label(value: str) -> str:
     cleaned = value.strip().lower()
     cleaned = cleaned.replace("years", "yrs").replace("year", "yr")
@@ -329,7 +326,6 @@ main
         raw_value = str(normalized.get(field, "")).strip()
         alias_value = _CATEGORY_ALIASES.get(field, {}).get(raw_value, raw_value)
 
-codex/update-api-and-readme-for-credit-risk-assessment-hblksp
         allowed_values = allowed_map[field]
         allowed_by_normalized = {_normalize_label(value): value for value in allowed_values}
         normalized_key = _normalize_label(alias_value)
@@ -379,7 +375,6 @@ def predict_risk(payload: Dict[str, float]) -> RiskPrediction:
 
     features = _feature_engineering(base)[FEATURE_COLUMNS]
     bundle = _get_bundle()
-codex/update-api-and-readme-for-credit-risk-assessment-hblksp
     preprocessor = bundle.model.named_steps["preprocessor"]
     transformed = preprocessor.transform(features)
     nnz = int(getattr(transformed, "nnz", np.count_nonzero(transformed)))
@@ -409,7 +404,6 @@ codex/update-api-and-readme-for-credit-risk-assessment-hblksp
 
     # Conservative monotonic calibration: higher income should generally reduce default risk.
     income = float(base.get("income", pd.Series([4000.0])).iloc[0])
-codex/update-api-and-readme-for-credit-risk-assessment-hblksp
     income_adjustment = np.clip(4000.0 / max(income, 1.0), 0.7, 1.6)
  
     income_adjustment = np.clip(10000.0 / max(income, 1.0), 0.05, 8.0)
