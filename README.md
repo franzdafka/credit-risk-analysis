@@ -77,6 +77,9 @@ Run tests locally:
 
 ```bash
 pytest tests/ -v
+```
+Tests also run automatically in GitHub Actions on every push and pull request to `main`.
+
 
 ## CI/CD
 
