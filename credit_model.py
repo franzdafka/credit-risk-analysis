@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 import logging
 import re
-main
 from typing import Any, Dict
 
 import joblib
@@ -95,7 +94,6 @@ class CategoryValidationError(Exception):
 
 
  
-main
 def _load_german_credit_dataset() -> pd.DataFrame:
     if LOCAL_DATASET_PATH.exists():
         return pd.read_csv(LOCAL_DATASET_PATH)
@@ -319,8 +317,6 @@ def validate_and_normalize_categories(payload: Dict[str, float | str]) -> Dict[s
     normalized = dict(payload)
     allowed_map = get_allowed_request_categories()
     
-_BUNDLE: ModelBundle | None = None
-main
 
     for field in REQUEST_CATEGORY_FIELDS:
         raw_value = str(normalized.get(field, "")).strip()
@@ -347,7 +343,6 @@ _BUNDLE: ModelBundle | None = None
 
 
 
-main
 def _get_bundle() -> ModelBundle:
     global _BUNDLE
     if _BUNDLE is None:
