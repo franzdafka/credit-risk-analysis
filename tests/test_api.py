@@ -9,7 +9,6 @@ def _base_payload() -> dict:
     return {
         "duration": 24,
         "amount": 5000,
-        "income": 4200,
         "age": 35,
         "installment_rate": 2,
         "number_credits": 1,
@@ -32,8 +31,11 @@ def test_predict_returns_decision() -> None:
     response = client.post("/predict", json=_base_payload())
     assert response.status_code == 200
     body = response.json()
-    assert "decision" in body
-    assert body["decision"] in ("approve", "reject")
+    assert "underwriting_decision" in body
+    assert body["underwriting_decision"] in ("approve", "decline")
+    assert "probability_default" in body
+    assert "rating_grade" in body
+    assert body["rating_grade"] in ("low", "medium", "high")
 
 
 def test_explain_returns_top_3_positive_and_negative_features() -> None:
@@ -63,26 +65,13 @@ def test_predict_accepts_known_alias_category_values() -> None:
 
 def test_predict_handles_extreme_values() -> None:
     payload = _base_payload()
-    payload["income"] = 1
     payload["amount"] = 10_000_000
     response = client.post("/predict", json=payload)
     assert response.status_code == 200
 
 
-def test_income_monotonicity_generally_decreases_risk() -> None:
-    base_payload = _base_payload()
-
-    low_income_payload = dict(base_payload)
-    high_income_payload = dict(base_payload)
-    low_income_payload["income"] = 1500
-    high_income_payload["income"] = 9000
-
-    low_income_response = client.post("/predict", json=low_income_payload)
-    high_income_response = client.post("/predict", json=high_income_payload)
-
-    assert low_income_response.status_code == 200
-    assert high_income_response.status_code == 200
-    assert (
-        low_income_response.json()["probability_default"]
-        >= high_income_response.json()["probability_default"]
-    )
+def test_pd_is_valid_probability() -> None:
+    response = client.post("/predict", json=_base_payload())
+    assert response.status_code == 200
+    pd = response.json()["probability_default"]
+    assert 0.0 <= pd <= 1.0
