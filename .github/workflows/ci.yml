@@ -9,21 +9,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Train model artifact
-        run: python train_model.py
-
-      - name: Run tests
-        run: pytest tests/ -v
-        
+      - run: pip install -r requirements.txt
+      - run: pytest tests/ -v
+      - name: Smoke test API
+        run: |
+          uvicorn api:app --port 8000 &
+          sleep 3
+          curl -f http://localhost:8000/health
