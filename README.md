@@ -25,7 +25,7 @@ Logistic regression was chosen as the primary classifier because its outputs are
 ## Model output and decision mapping
 
 | Output field | Meaning | IRB mapping |
-|---|---|---|
+|-------|---------|------|-----------|--------|-----|---|
 | `probability_default` | Estimated 12-month PD | PD input to RWA calculation |
 | `risk_band: low` | PD < 0.30 | Investment grade equivalent |
 | `risk_band: medium` | 0.30 <= PD < 0.60 | Sub-investment grade |
@@ -86,12 +86,12 @@ The raw dataset has limited features so several derived ones were constructed:
 
 Four classifiers were compared using 5-fold stratified cross-validation. Full results including ROC curves, lift curves, calibration plots, and SHAP analysis are in `analysis.ipynb`.
 
-| Model | Role |
-|---|---|
-| Logistic Regression | Primary model (deployed) |
-| Random Forest | Ensemble benchmark |
-| Gradient Boosting | Ensemble benchmark |
-| XGBoost | Ensemble benchmark |
+| Model | AUC-ROC | Gini | Precision | Recall | F1 |
+|-------|---------|------|-----------|--------|-----|
+| Logistic Regression (deployed) | 0.674 | 0.348 | 0.794 | 0.579 | 0.669 |
+| Random Forest | 0.693 | 0.385 | 0.719 | 0.857 | 0.782 |
+| Gradient Boosting | 0.750 | 0.500 | 0.744 | 0.829 | 0.784 |
+| XGBoost | 0.730 | 0.460 | 0.756 | 0.886 | 0.816 |
 
 Logistic Regression was selected for deployment on three grounds: calibrated probability outputs (required for PD estimation), mathematical exactness of SHAP explanations (required for auditability), and regulatory preference for interpretable models in credit decisions (EBA/GL/2020/06).
 
