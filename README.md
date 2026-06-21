@@ -1,6 +1,6 @@
 # Credit Risk Assessment Service
 
-A deployable probability-of-default scoring service for retail credit. Built with FastAPI, scikit-learn, and SHAP — exposes a REST API with per-decision explanations and a Streamlit UI for underwriting simulations. Structured around the Basel III IRB Expected Loss framework: **EL = PD × LGD × EAD**.
+A probability-of-default scoring service for retail credit. Built with FastAPI, scikit-learn, and SHAP — exposes a REST API with per-decision explanations structured around the Basel III IRB Expected Loss framework: **EL = PD × LGD × EAD**.
 
 ---
 
@@ -15,7 +15,7 @@ Trained on the [German Credit Dataset](https://archive.ics.uci.edu/ml/datasets/s
 | Calibration | Well-calibrated | Required for IRB PD |
 | SHAP exactness | Mathematically exact | Required for GDPR Art. 22 |
 
-The Gini of 0.35 reflects feature sparsity in the 1990s dataset, not a modelling deficiency. A challenger model on the Home Credit Default Risk dataset (307k applications) is planned and expected to reach Gini > 0.55.
+The Gini of 0.35 reflects feature sparsity in the 1990s dataset. A challenger model on the Home Credit Default Risk dataset (307k applications) is planned and expected to reach Gini > 0.55.
 
 ![ROC Curve](roc_curve.png)
 
@@ -23,42 +23,22 @@ The Gini of 0.35 reflects feature sparsity in the 1990s dataset, not a modelling
 
 ## Feature Importance (SHAP)
 
-The top predictors by mean absolute SHAP value. `number_of_delinquencies` and `duration` dominate — consistent with standard retail credit scoring literature.
+`number_of_delinquencies` and `duration` dominate — consistent with standard retail credit scoring literature.
 
 ![SHAP Importance](shap_importance.png)
 
 ---
 
-## UI
-
-![Streamlit UI](docs/screenshot.png)
-
----
-
-## Architecture
-
-```
-Streamlit UI (app.py)
-      │
-      │  HTTP / JSON
-      ▼
-FastAPI service (api.py)
-      │
-      ▼
-credit_model.py
-  ├── feature engineering pipeline
-  ├── LogisticRegression (class-weighted, liblinear)
-  └── SHAP LinearExplainer (exact values)
-```
+## Project Structure
 
 | File | Role |
 |---|---|
 | `credit_model.py` | Model training, feature engineering, SHAP inference |
 | `api.py` | REST API — `/predict`, `/explain`, `/health` |
-| `app.py` | Streamlit UI, calls the API with local model fallback |
 | `train_model.py` | Trains and serializes artifact to `artifacts/` |
 | `eda.py` | Exploratory analysis — distributions, correlations, missing values |
 | `model_benchmark.py` | Benchmarks LR, Random Forest, Gradient Boosting, XGBoost |
+| `analyse.py` | Classification report and baseline metrics |
 | `tests/test_api.py` | Smoke, boundary, and monotonicity tests |
 
 ---
@@ -131,7 +111,7 @@ Five features derived from the raw dataset:
 
 | Feature | Description |
 |---|---|
-| `dti_ratio` | Loan amount divided by estimated income proxy (installment rate × employment length) |
+| `dti_ratio` | Loan amount divided by estimated income proxy |
 | `employment_length` | Ordinal encoding of employment duration band |
 | `number_of_delinquencies` | Binary flag derived from credit history text |
 | `credit_history_length` | Age-based proxy for length of credit track record |
@@ -141,24 +121,13 @@ Five features derived from the raw dataset:
 
 ## Quick Start
 
-**Local Python**
-
 ```bash
 pip install -r requirements.txt
 python3 train_model.py
-
-uvicorn api:app --reload --port 8000   # terminal 1
-streamlit run app.py                   # terminal 2
+uvicorn api:app --reload --port 8000
 ```
 
-- API docs: http://localhost:8000/docs
-- UI: http://localhost:8501
-
-**Docker Compose**
-
-```bash
-docker compose up --build
-```
+API docs: http://localhost:8000/docs
 
 ---
 
