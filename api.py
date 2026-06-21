@@ -118,8 +118,8 @@ def predict(request: CreditRequest) -> CreditResponse:
     summary="SHAP-based decision explanation",
     description=(
         "Returns the top positive and negative SHAP factors driving the PD estimate "
-        "for a given applicant in the reference dataset. For a linear model, SHAP values "
-        "are mathematically exact and satisfy GDPR Article 22 explainability requirements."
+        "for a given applicant in the reference dataset, using TreeSHAP for the "
+        "underlying XGBoost model."
     ),
 )
 def explain(user_id: int) -> dict:

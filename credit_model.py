@@ -12,11 +12,11 @@ import pandas as pd
 import shap
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from xgboost import XGBClassifier
 
 DATA_DIR = Path(__file__).parent / "data"
 LOCAL_DATASET_PATH = DATA_DIR / "GermanCredit.csv"
@@ -241,7 +241,15 @@ def train_and_serialize_model(version: str) -> ModelBundle:
             ("preprocessor", _build_preprocessor()),
             (
                 "classifier",
-                LogisticRegression(max_iter=2500, class_weight="balanced", solver="liblinear"),
+                XGBClassifier(
+                    n_estimators=300,
+                    max_depth=4,
+                    learning_rate=0.05,
+                    subsample=0.9,
+                    colsample_bytree=0.9,
+                    eval_metric="logloss",
+                    random_state=42,
+                ),
             ),
         ]
     )
@@ -399,15 +407,14 @@ def predict_risk(payload: Dict[str, float]) -> RiskPrediction:
 
     classifier = bundle.model.named_steps["classifier"]
     prob_good = float(classifier.predict_proba(transformed)[0][1])
-
-    prob_good = float(bundle.model.predict_proba(features)[0][1])
     probability_default = 1 - prob_good
 
-    # Conservative monotonic calibration: higher income should generally reduce default risk.
+    # Conservative monotonic adjustment: higher income should generally reduce
+    # default risk, even though income is not a feature the model is trained on
+    # directly (it is proxied via dti_ratio). Bounded to avoid distorting the
+    # underlying model output.
     income = float(base.get("income", pd.Series([4000.0])).iloc[0])
     income_adjustment = np.clip(4000.0 / max(income, 1.0), 0.7, 1.6)
- 
-    income_adjustment = np.clip(10000.0 / max(income, 1.0), 0.05, 8.0)
     probability_default = float(np.clip(probability_default * income_adjustment, 0.0, 1.0))
 
     predicted_default = probability_default >= 0.5
@@ -437,10 +444,9 @@ def explain_user_risk(user_id: int, top_k: int = 3) -> dict[str, list[dict[str, 
     preprocessor = bundle.model.named_steps["preprocessor"]
     classifier = bundle.model.named_steps["classifier"]
 
-    transformed_frame = preprocessor.transform(frame[FEATURE_COLUMNS])
     transformed_sample = preprocessor.transform(sample)
 
-    explainer = shap.LinearExplainer(classifier, transformed_frame)
+    explainer = shap.TreeExplainer(classifier)
     shap_values = explainer.shap_values(transformed_sample)
 
     if isinstance(shap_values, list):
