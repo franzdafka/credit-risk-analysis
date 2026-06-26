@@ -46,51 +46,63 @@ On 5-fold cross-validation, Random Forest and Logistic Regression record margina
 
 ## SHAP Feature Importance
 
-Global mean absolute SHAP values identify the following variables as the primary drivers of predicted default probability:
+Global mean absolute SHAP values identify the following variables as the strongest drivers of predicted probability of default:
 
-- Loan duration
-- Loan amount
-- Credit history category (particularly "critical account/other credits existing")
-- Engineered credit history length
-- Debt-to-income proxy (dti_ratio)
+- cat__status_no checking account (strongest)
+- cat__status_... < 100 DM
+- num__installment_rate
+- num__duration
+- cat__purpose_car (new)
+- cat__savings_... < 100 DM
+- cat__housing_own
 
-These findings align with established retail credit risk literature: longer exposures, larger amounts, and adverse credit behaviour increase predicted risk, while indicators of stability reduce it.
+These findings are consistent with standard retail credit risk practice, where checking account status and balances, repayment burden and loan duration are among the most predictive signals of default.
 
 ![SHAP Feature Importance](docs/shap_importance.png)
 
 ## Business Interpretation of SHAP Features
 
-The following paragraphs translate the dominant SHAP drivers into terms used by credit risk managers and underwriters.
+Global mean absolute SHAP values from the model identify the following variables as the strongest drivers of predicted probability of default:
+
+- cat__status_no checking account
+- cat__status_... < 100 DM
+- num__installment_rate
+- num__duration
+- cat__purpose_car (new)
+- cat__savings_... < 100 DM
+- cat__housing_own
+
+These attributions reflect observable characteristics routinely used in retail credit assessment.
+
+**Checking account status: no checking account**
+
+Absence of a checking account is the single most powerful risk-increasing factor. It indicates that the applicant has no established banking relationship with the institution and provides no observable transaction history or cash-flow behaviour. This creates significant information asymmetry and adverse selection risk. In practice, applicants in this category receive materially higher PD estimates and are more likely to be subject to manual review or stricter policy overlays.
+
+**Checking account status: ... < 100 DM**
+
+Low or minimal balances in the checking account signal limited immediate liquidity. Borrowers who maintain persistently low account balances have reduced capacity to meet even modest short-term obligations without drawing on other resources. This variable ranks highly because it captures a contemporaneous and granular indicator of financial stress that is directly relevant to repayment probability.
+
+**Instalment rate**
+
+A higher instalment rate relative to disposable income increases the proportion of monthly cash flow already committed to debt service. When instalments represent a large share of income, the borrower has less margin to absorb income volatility, expense shocks or changes in employment status. Credit officers use this attribute to assess affordability and to determine whether the requested loan amount is sustainable.
 
 **Loan duration**
 
-Longer contractual tenors raise the cumulative probability of default because the borrower remains exposed to income, employment or macroeconomic shocks for a greater number of periods. A 48-month facility will, all else equal, receive a higher PD contribution than a 12-month facility. In practice this leads to tenor caps, stepped pricing or additional security requirements for longer-maturity requests.
+Longer loan terms extend the period over which default can materialise. All else equal, a facility with a 48-month tenor carries greater cumulative risk than one with a 12-month tenor because the borrower remains exposed to employment, health and macroeconomic events for a longer horizon. This consideration typically informs maximum tenor limits and maturity-based adjustments in pricing and capital allocation.
 
-**Loan amount and repayment burden (dti_ratio)**
+**Purpose: car (new)**
 
-Larger absolute loan amounts increase exposure at default. The engineered dti_ratio approximates the proportion of inferred disposable income required to service the instalments. Higher values indicate stretched repayment capacity and are associated with elevated PD. Underwriters typically respond by reducing the approved amount, requiring a larger down-payment or obtaining a guarantor.
+New-car financing features among the top contributors to the PD prediction. The direction of the effect often reflects the presence of tangible collateral (the vehicle) and a tendency for this purpose to be associated with more stable borrower profiles. Banks commonly apply differentiated treatment by loan purpose, using it both within scorecards and in policy rules to set purpose-specific cut-offs or pricing.
 
-**Credit history**
+**Savings balance: ... < 100 DM**
 
-The single strongest categorical signal is a "critical account/other credits existing" history. This category produces a large positive contribution to PD, reflecting observable past payment difficulties or over-indebtedness at other institutions. In contrast, a clean record ("existing credits paid back duly till now") exerts a negative (risk-reducing) effect. Credit history remains one of the most powerful and intuitive variables in retail scorecards and is frequently subject to policy overrides.
+Very low savings balances indicate limited accumulated reserves available to cushion against unexpected events. Applicants with minimal savings have lower financial resilience and are more vulnerable to temporary income shortfalls. This factor is particularly material for unsecured lending products where recovery relies primarily on the borrower's ongoing repayment capacity rather than collateral.
 
-**Purpose of credit**
+**Housing status: own**
 
-Loan purpose exhibits heterogeneous risk once other applicant characteristics are controlled for. Financing of used vehicles or domestic appliances tends to show higher risk contributions than new-car or furniture purchases. The difference may arise from collateral quality, borrower motivation or unobserved income characteristics. Many banks apply purpose-specific score adjustments or minimum PD floors.
+Home ownership is typically a protective factor. Ownership is associated with greater financial stability, wealth accumulation and a lower propensity for mobility-related or strategic default. In credit decisioning, home ownership often supports more favourable risk assessment, both through the model output and through explicit policy treatment that may permit higher loan-to-value ratios or improved pricing for qualifying applicants.
 
-**Employment stability**
-
-Applicants reporting current employment of less than one year receive higher risk attributions. Longer tenure in the current role is associated with greater income predictability and a demonstrated ability to meet recurring obligations. Employment duration is commonly used both as a direct model input and as a manual review trigger (for example, probationary periods).
-
-**Age and inferred credit history length**
-
-Older applicants and those with longer derived credit histories (approximated via age and loan duration) generally attract lower PD contributions. Age serves partly as a proxy for accumulated financial experience, asset accumulation and behavioural stability. In IRB contexts this variable must be monitored for potential age discrimination effects.
-
-**Number of delinquencies**
-
-A binary flag derived from credit history text that indicates past delays or critical status directly increases the predicted probability of default. Because the variable is explicitly constructed and highly interpretable, it lends itself to use in override rules, second-level review and model monitoring.
-
-Collectively these attributions allow individual credit decisions to be explained in language acceptable to model risk management, internal audit and, where required, to applicants under consumer protection regulations.
+These SHAP attributions enable individual credit decisions to be explained to model risk management, internal audit and, where relevant, to applicants in terms of standard retail lending variables. They also support ongoing model monitoring and the identification of segments where policy overlays may be warranted.
 
 ## Cost-Sensitive Threshold Optimisation
 
