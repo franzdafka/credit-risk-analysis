@@ -11,3 +11,4 @@ seaborn
 shap
 pytest
 httpx
+scipy

@@ -27,16 +27,22 @@ A production-oriented implementation of a retail credit probability-of-default (
 
 The model is trained on the Statlog (German Credit) dataset (Hofmann, 1994). The data comprise 1 000 obligors and 21 raw attributes with an approximate 70/30 good/bad risk split.
 
-| Model                | AUC-ROC (5-fold CV) | AUC-ROC (test set) |
-|----------------------|---------------------|--------------------|
-| Logistic Regression  | 0.780               | 0.776              |
-| Random Forest        | 0.784               | 0.780              |
-| Gradient Boosting    | 0.762               | 0.783              |
-| XGBoost (selected)   | 0.766               | 0.787              |
+| Model                | AUC-ROC (5-fold CV) | AUC-ROC (test set) | KS Statistic |
+|----------------------|---------------------|--------------------|--------------|
+| Logistic Regression  | 0.780               | 0.776              | —            |
+| Random Forest        | 0.784               | 0.780              | —            |
+| Gradient Boosting    | 0.762               | 0.783              | —            |
+| XGBoost (selected)   | 0.766               | 0.787              | 0.462        |
 
 Gini coefficient of the selected XGBoost model: 0.574.
 
+KS statistic of the selected XGBoost model: 0.462.
+
+The KS statistic of 0.462 falls in the good range (0.40–0.60), indicating strong separation between the predicted probability distributions of good and bad applicants. This confirms that the model ranks defaulters and non-defaulters effectively on the held-out test data.
+
 ![ROC Curves](docs/roc_curves.png)
+
+![KS Curve](docs/ks_curve.png)
 
 ### Model Selection Rationale
 
@@ -279,7 +285,7 @@ The test suite validates endpoint responses, input sanitisation and a basic mono
 ## Methodology
 
 - Validation: stratified 80/20 train/test split; 5-fold cross-validation for model comparison.
-- Primary metric: Area Under the Receiver Operating Characteristic Curve (AUC-ROC). Gini coefficient reported as 2 x AUC - 1.
+- Primary metric: Area Under the Receiver Operating Characteristic Curve (AUC-ROC). Gini coefficient reported as 2 x AUC - 1. KS statistic (via `scipy.stats.ks_2samp`) reported as the maximum separation between the empirical CDFs of predicted probabilities for the good and bad classes.
 - Explainability: TreeSHAP applied to the final XGBoost classifier for both local and global attributions.
 - Decision threshold: optimised explicitly under an asymmetric cost function rather than using the conventional 0.5 cutoff.
 
