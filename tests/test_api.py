@@ -1,77 +1,70 @@
+import pandas as pd
 from fastapi.testclient import TestClient
 
+import credit_model as cm
 from api import app
 
 client = TestClient(app)
 
 
-def _base_payload() -> dict:
-    return {
-        "duration": 24,
-        "amount": 5000,
-        "age": 35,
-        "installment_rate": 2,
-        "number_credits": 1,
-        "people_liable": 1,
-        "purpose": "car (new)",
-        "credit_history": "existing credits paid back duly till now",
-        "employment_duration": "1 <= ... < 4 years",
-    }
+def _payload(row: int = 0) -> dict:
+    df = pd.read_csv(cm.DATA_PATH)
+    record = df.loc[row, cm.RAW_FEATURES].to_dict()
+    return {k: (v.item() if hasattr(v, "item") else v) for k, v in record.items()}
 
 
 def test_health() -> None:
-    response = client.get("/health")
-    assert response.status_code == 200
-    body = response.json()
+    body = client.get("/health").json()
     assert body["status"] == "ok"
     assert body["model_version"]
 
 
-def test_predict_returns_decision() -> None:
-    response = client.post("/predict", json=_base_payload())
+def test_categories_cover_all_categorical_fields() -> None:
+    body = client.get("/categories").json()
+    assert set(body) == set(cm.CATEGORICAL_FEATURES)
+
+
+def test_predict_returns_valid_pd_grade_and_decision() -> None:
+    response = client.post("/predict", json=_payload())
     assert response.status_code == 200
     body = response.json()
-    assert "underwriting_decision" in body
-    assert body["underwriting_decision"] in ("approve", "decline")
-    assert "probability_default" in body
-    assert "rating_grade" in body
-    assert body["rating_grade"] in ("low", "medium", "high")
+    assert 0.0 <= body["probability_default"] <= 1.0
+    assert body["rating_grade"] == cm.rating_grade(body["probability_default"])
+    expected = "decline" if body["probability_default"] >= body["decision_threshold"] else "approve"
+    assert body["decision"] == expected
 
 
-def test_explain_returns_top_3_positive_and_negative_features() -> None:
-    response = client.get("/explain", params={"user_id": 0})
-    assert response.status_code == 200
-    body = response.json()
-    assert len(body["top_positive"]) == 3
-    assert len(body["top_negative"]) == 3
+def test_predict_matches_model_directly() -> None:
+    payload = _payload(5)
+    api_pd = client.post("/predict", json=payload).json()["probability_default"]
+    frame = cm.add_features(pd.DataFrame([payload]))[cm.FEATURE_COLUMNS]
+    direct_pd = cm.load_artifact()["model"].predict_proba(frame)[0, 1]
+    assert abs(api_pd - direct_pd) < 1e-9
 
 
-def test_predict_rejects_unknown_category_with_422() -> None:
-    payload = _base_payload()
-    payload["credit_history"] = "totally unknown category"
+def test_unknown_category_returns_422_with_allowed_values() -> None:
+    payload = _payload()
+    payload["purpose"] = "spaceship"
     response = client.post("/predict", json=payload)
     assert response.status_code == 422
-    body = response.json()
-    assert body["detail"]["field"] == "credit_history"
+    detail = response.json()["detail"]
+    assert detail["field"] == "purpose"
+    assert "business" in detail["allowed"]
 
 
-def test_predict_accepts_known_alias_category_values() -> None:
-    payload = _base_payload()
-    payload["credit_history"] = "existing credits paid back duly till now"
-    payload["employment_duration"] = "... >= 7 years"
-    response = client.post("/predict", json=payload)
-    assert response.status_code == 200
+def test_out_of_range_numeric_is_rejected() -> None:
+    payload = _payload()
+    payload["installment_rate"] = 9
+    assert client.post("/predict", json=payload).status_code == 422
 
 
-def test_predict_handles_extreme_values() -> None:
-    payload = _base_payload()
-    payload["amount"] = 10_000_000
-    response = client.post("/predict", json=payload)
-    assert response.status_code == 200
+def test_explain_returns_three_drivers_each_side() -> None:
+    body = client.get("/explain", params={"user_id": 0}).json()
+    assert len(body["risk_increasing"]) == 3
+    assert len(body["risk_reducing"]) == 3
+    assert all(d["shap_value"] > 0 for d in body["risk_increasing"])
+    assert all(d["shap_value"] < 0 for d in body["risk_reducing"])
 
 
-def test_pd_is_valid_probability() -> None:
-    response = client.post("/predict", json=_base_payload())
-    assert response.status_code == 200
-    pd = response.json()["probability_default"]
-    assert 0.0 <= pd <= 1.0
+def test_explain_unknown_user_is_404() -> None:
+    assert client.get("/explain", params={"user_id": 999_999}).status_code == 404

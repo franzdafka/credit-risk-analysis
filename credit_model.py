@@ -1,482 +1,399 @@
+"""Probability-of-default model for the Statlog (German Credit) dataset.
+
+One pipeline is used everywhere (evaluation, training, API):
+
+1. Hold out a stratified 20% test set. It is used once, for the final report.
+2. Compare candidate models by repeated stratified 5-fold CV AUC on the
+   training set only, and select the best mean CV AUC.
+3. Calibrate the selected model (Platt / isotonic, chosen by CV Brier score),
+   so that the output can be read as a probability of default.
+4. Choose the approve / decline threshold from out-of-fold PDs on the
+   training set, under an explicit cost matrix.
+"""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-import logging
-import re
-from typing import Any, Dict
+from typing import Any
 
 import joblib
 import numpy as np
 import pandas as pd
-import shap
+from sklearn.base import clone
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.compose import ColumnTransformer
-from sklearn.impute import SimpleImputer
-from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import train_test_split
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import brier_score_loss, roc_auc_score
+from sklearn.model_selection import (
+    RepeatedStratifiedKFold,
+    StratifiedKFold,
+    cross_val_predict,
+    cross_val_score,
+    train_test_split,
+)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from xgboost import XGBClassifier
 
-DATA_DIR = Path(__file__).parent / "data"
-LOCAL_DATASET_PATH = DATA_DIR / "GermanCredit.csv"
-REMOTE_DATASET_URL = "https://raw.githubusercontent.com/selva86/datasets/master/GermanCredit.csv"
-
-ARTIFACT_DIR = Path(__file__).parent / "artifacts"
+ROOT = Path(__file__).parent
+DATA_PATH = ROOT / "data" / "GermanCredit.csv"
+ARTIFACT_DIR = ROOT / "artifacts"
 MODEL_ARTIFACT_PATH = ARTIFACT_DIR / "credit_risk_model.joblib"
 
-BASE_FEATURE_COLUMNS = [
+RANDOM_STATE = 42
+TEST_SIZE = 0.2
+
+# Cost matrix (Statlog convention): approving a borrower who defaults costs 5,
+# declining a borrower who would have repaid costs 1 (lost margin).
+COST_BAD_APPROVED = 5.0
+COST_GOOD_DECLINED = 1.0
+
+NUMERIC_FEATURES = [
     "duration",
     "amount",
-    "age",
     "installment_rate",
+    "present_residence",
+    "age",
     "number_credits",
     "people_liable",
-    "purpose",
+    "monthly_amount",
+]
+CATEGORICAL_FEATURES = [
+    "status",
     "credit_history",
+    "purpose",
+    "savings",
     "employment_duration",
+    "personal_status_sex",
+    "other_debtors",
+    "property",
+    "other_installment_plans",
+    "housing",
+    "job",
+    "telephone",
+    "foreign_worker",
 ]
+RAW_FEATURES = [c for c in NUMERIC_FEATURES if c != "monthly_amount"] + CATEGORICAL_FEATURES
+FEATURE_COLUMNS = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 
-ENGINEERED_FEATURE_COLUMNS = [
-    "dti_ratio",
-    "credit_history_length",
-    "number_of_delinquencies",
-    "employment_length",
-    "loan_purpose",
-]
-
-FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + ENGINEERED_FEATURE_COLUMNS
-REQUEST_CATEGORY_FIELDS = ["purpose", "credit_history", "employment_duration"]
-
-LOGGER = logging.getLogger(__name__)
-
-_CATEGORY_ALIASES: dict[str, dict[str, str]] = {
-    "credit_history": {
-        "existing credits paid back duly till now": "existing paid",
-        "critical account/other credits existing (not at this bank)": "critical/other existing credit",
-        "delay in paying off in the past": "delay in paying off in the past",
-    },
-    "employment_duration": {
-        "... < 1 year": "< 1 yr",
-        "1 <= ... < 4 years": "1 <= ... < 4 yrs",
-        "4 <= ... < 7 years": "4 <= ... < 7 yrs",
-        "... >= 7 years": ">= 7 yrs",
-    },
-}
+# Rating grades on the calibrated PD (upper bounds, exclusive).
+RATING_GRADES = [("A", 0.05), ("B", 0.10), ("C", 0.20), ("D", 0.35), ("E", 1.01)]
 
 
-@dataclass(frozen=True)
-class RiskPrediction:
-    probability_default: float
-    predicted_default: bool
-    risk_band: str
+# ---------------------------------------------------------------- data
 
 
-@dataclass(frozen=True)
-class ModelMetrics:
-    auc_roc: float
-    gini_coefficient: float
-
-
-@dataclass(frozen=True)
-class ModelBundle:
-    model: Pipeline
-    metrics: ModelMetrics
-    version: str
-    reference_frame: pd.DataFrame
-
-
-@dataclass(frozen=True)
-class CategoryValidationError(Exception):
-    field: str
-    value: str
-    allowed: list[str]
-
-
- 
-def _load_german_credit_dataset() -> pd.DataFrame:
-    if LOCAL_DATASET_PATH.exists():
-        return pd.read_csv(LOCAL_DATASET_PATH)
-
-    DATA_DIR.mkdir(exist_ok=True)
-    try:
-        df = pd.read_csv(REMOTE_DATASET_URL)
-        df.to_csv(LOCAL_DATASET_PATH, index=False)
-        return df
-    except Exception:
-        rng = np.random.default_rng(42)
-        n = 800
-        duration = rng.integers(4, 72, n)
-        amount = rng.integers(250, 20000, n)
-        age = rng.integers(18, 75, n)
-        installment_rate = rng.integers(1, 5, n)
-        number_credits = rng.integers(1, 4, n)
-        people_liable = rng.integers(1, 3, n)
-        purpose = rng.choice(["car", "furniture/equipment", "business", "education"], n)
-        credit_history = rng.choice(
-            [
-                "critical/other existing credit",
-                "existing paid",
-                "all paid",
-                "delay in paying off in the past",
-            ],
-            n,
-        )
-        employment_duration = rng.choice(["< 1 yr", "1 <= ... < 4 yrs", "4 <= ... < 7 yrs", ">= 7 yrs"], n)
-
-        risk_score = (
-            0.00008 * amount
-            + 0.02 * duration
-            + 0.22 * installment_rate
-            - 0.018 * age
-            + 0.35 * (credit_history == "delay in paying off in the past").astype(int)
-            + 0.15 * (purpose == "business").astype(int)
-            + rng.normal(0, 0.3, n)
-        )
-        probability_good = 1 / (1 + np.exp(risk_score - 3.5))
-        credit_risk = (probability_good > 0.5).astype(int)
-
-        return pd.DataFrame(
-            {
-                "duration": duration,
-                "amount": amount,
-                "age": age,
-                "installment_rate": installment_rate,
-                "number_credits": number_credits,
-                "people_liable": people_liable,
-                "purpose": purpose,
-                "credit_history": credit_history,
-                "employment_duration": employment_duration,
-                "credit_risk": credit_risk,
-            }
-        )
-
-
-def _feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
+def add_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add the single engineered feature: amount repaid per month of the loan."""
     out = df.copy()
-
-    out["loan_purpose"] = out["purpose"].astype(str).fillna("unknown")
-
-    credit_history_text = out["credit_history"].astype(str).str.lower()
-    out["number_of_delinquencies"] = (
-        credit_history_text.str.contains("delay|critical|overdue", regex=True).astype(int)
-    )
-
-    mapping = {
-        "unemployed": 0.0,
-        "< 1 yr": 0.5,
-        "1 <= ... < 4 yrs": 2.5,
-        "4 <= ... < 7 yrs": 5.5,
-        ">= 7 yrs": 8.0,
-    }
-    out["employment_length"] = out["employment_duration"].map(mapping).fillna(2.0)
-
-    out["credit_history_length"] = (out["age"] - 18).clip(lower=0) + 0.25 * out["duration"]
-
-    income_proxy = (out["installment_rate"] * 1100.0) + (out["employment_length"] * 700.0)
-
-    out["dti_ratio"] = out["amount"] / income_proxy.clip(lower=1.0)
-    out["dti_ratio"] = out["dti_ratio"].replace([np.inf, -np.inf], np.nan).fillna(0)
-
+    out["monthly_amount"] = out["amount"] / out["duration"].clip(lower=1)
     return out
 
 
-def _build_training_data() -> tuple[pd.DataFrame, pd.Series]:
-    df = _load_german_credit_dataset()
-    df = _feature_engineering(df)
-    y = df["credit_risk"].astype(int)
-    X = df[FEATURE_COLUMNS].copy()
-    return X, y
+def load_data() -> tuple[pd.DataFrame, pd.Series]:
+    """Return features and the default flag (1 = bad credit risk)."""
+    df = pd.read_csv(DATA_PATH)
+    df = add_features(df)
+    y = (1 - df["credit_risk"]).astype(int).rename("default")
+    return df[FEATURE_COLUMNS], y
 
 
-def _build_preprocessor() -> ColumnTransformer:
-    numeric_features = [
-        "duration",
-        "amount",
-        "age",
-        "installment_rate",
-        "number_credits",
-        "people_liable",
-        "dti_ratio",
-        "credit_history_length",
-        "number_of_delinquencies",
-        "employment_length",
-    ]
-    categorical_features = ["purpose", "credit_history", "employment_duration", "loan_purpose"]
+def split(X: pd.DataFrame, y: pd.Series):
+    return train_test_split(X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y)
 
+
+# ---------------------------------------------------------------- models
+
+
+def build_preprocessor() -> ColumnTransformer:
     return ColumnTransformer(
-        transformers=[
-            (
-                "num",
-                Pipeline(
-                    [
-                        ("imputer", SimpleImputer(strategy="median")),
-                        ("scaler", StandardScaler()),
-                    ]
-                ),
-                numeric_features,
-            ),
-            (
-                "cat",
-                Pipeline(
-                    [
-                        ("imputer", SimpleImputer(strategy="most_frequent")),
-                        ("onehot", OneHotEncoder(handle_unknown="ignore")),
-                    ]
-                ),
-                categorical_features,
-            ),
-        ]
-    )
-
-
-def train_and_serialize_model(version: str) -> ModelBundle:
-    X, y = _build_training_data()
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-
-    model = Pipeline(
         [
-            ("preprocessor", _build_preprocessor()),
-            (
-                "classifier",
-                XGBClassifier(
-                    n_estimators=300,
-                    max_depth=4,
-                    learning_rate=0.05,
-                    subsample=0.9,
-                    colsample_bytree=0.9,
-                    eval_metric="logloss",
-                    random_state=42,
-                ),
-            ),
+            ("num", StandardScaler(), NUMERIC_FEATURES),
+            ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), CATEGORICAL_FEATURES),
         ]
     )
-    model.fit(X_train, y_train)
 
-    prob_good = model.predict_proba(X_test)[:, 1]
-    auc_roc = roc_auc_score(y_test, prob_good)
-    gini_coefficient = (2 * auc_roc) - 1
 
-    reference_frame = X.reset_index(drop=False).rename(columns={"index": "user_id"})
+def candidate_models() -> dict[str, Pipeline]:
+    classifiers = {
+        "Logistic Regression": LogisticRegression(C=0.3, max_iter=2000),
+        "Random Forest": RandomForestClassifier(
+            n_estimators=500, min_samples_leaf=5, random_state=RANDOM_STATE, n_jobs=-1
+        ),
+        "Gradient Boosting": GradientBoostingClassifier(
+            n_estimators=200, max_depth=2, learning_rate=0.05, subsample=0.8, random_state=RANDOM_STATE
+        ),
+        "XGBoost": XGBClassifier(
+            n_estimators=300,
+            max_depth=3,
+            learning_rate=0.03,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            eval_metric="logloss",
+            random_state=RANDOM_STATE,
+            n_jobs=1,
+        ),
+    }
+    return {name: Pipeline([("prep", build_preprocessor()), ("clf", clf)]) for name, clf in classifiers.items()}
 
+
+def cross_validate_candidates(X_train, y_train) -> pd.DataFrame:
+    """Repeated stratified 5-fold CV AUC on the training set only."""
+    cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=RANDOM_STATE)
+    rows = []
+    for name, model in candidate_models().items():
+        scores = cross_val_score(model, X_train, y_train, cv=cv, scoring="roc_auc", n_jobs=-1)
+        rows.append({"model": name, "cv_auc_mean": scores.mean(), "cv_auc_std": scores.std()})
+    return pd.DataFrame(rows).sort_values("cv_auc_mean", ascending=False).reset_index(drop=True)
+
+
+def choose_calibration(base: Pipeline, X_train, y_train) -> tuple[str, dict[str, float]]:
+    """Pick the calibration method with the lowest out-of-fold Brier score."""
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    briers: dict[str, float] = {}
+    oof = cross_val_predict(clone(base), X_train, y_train, cv=cv, method="predict_proba")[:, 1]
+    briers["none"] = brier_score_loss(y_train, oof)
+    for method in ("sigmoid", "isotonic"):
+        model = CalibratedClassifierCV(clone(base), method=method, cv=5)
+        oof = cross_val_predict(model, X_train, y_train, cv=cv, method="predict_proba")[:, 1]
+        briers[method] = brier_score_loss(y_train, oof)
+    return min(briers, key=briers.get), briers
+
+
+def make_calibrated(base: Pipeline, method: str):
+    if method == "none":
+        return clone(base)
+    return CalibratedClassifierCV(clone(base), method=method, cv=5)
+
+
+# ---------------------------------------------------------------- decisions
+
+
+def expected_cost(y_true, pd_hat, threshold: float) -> float:
+    """Average cost per applicant when declining every applicant with PD >= threshold."""
+    y_true = np.asarray(y_true)
+    decline = np.asarray(pd_hat) >= threshold
+    bad_approved = np.sum(~decline & (y_true == 1))
+    good_declined = np.sum(decline & (y_true == 0))
+    return (COST_BAD_APPROVED * bad_approved + COST_GOOD_DECLINED * good_declined) / len(y_true)
+
+
+def bayes_threshold() -> float:
+    """With calibrated PDs, decline when PD * C_bad > (1 - PD) * C_good."""
+    return COST_GOOD_DECLINED / (COST_GOOD_DECLINED + COST_BAD_APPROVED)
+
+
+def choose_threshold(y_train, oof_pd) -> float:
+    """Cost-minimising threshold on out-of-fold training PDs (never on the test set)."""
+    grid = np.round(np.arange(0.05, 0.96, 0.01), 2)
+    costs = [expected_cost(y_train, oof_pd, t) for t in grid]
+    return float(grid[int(np.argmin(costs))])
+
+
+def rating_grade(pd_value: float) -> str:
+    for grade, upper in RATING_GRADES:
+        if pd_value < upper:
+            return grade
+    return RATING_GRADES[-1][0]
+
+
+def ks_statistic(y_true, scores) -> float:
+    y_true = np.asarray(y_true)
+    scores = np.asarray(scores)
+    from scipy.stats import ks_2samp
+
+    return float(ks_2samp(scores[y_true == 1], scores[y_true == 0]).statistic)
+
+
+# ---------------------------------------------------------------- training
+
+
+@dataclass
+class TrainingResult:
+    cv_table: pd.DataFrame
+    selected_model: str
+    calibration: str
+    calibration_briers: dict[str, float]
+    threshold: float
+    oof_pd: np.ndarray
+    model: Any
+    explain_model: Pipeline
+    X_train: pd.DataFrame
+    X_test: pd.DataFrame
+    y_train: pd.Series
+    y_test: pd.Series
+    test_metrics: dict[str, float] = field(default_factory=dict)
+
+
+def train(verbose: bool = False) -> TrainingResult:
+    X, y = load_data()
+    X_train, X_test, y_train, y_test = split(X, y)
+
+    cv_table = cross_validate_candidates(X_train, y_train)
+    selected = cv_table.loc[0, "model"]
+    base = candidate_models()[selected]
+    if verbose:
+        print(cv_table.to_string(index=False))
+        print(f"Selected by CV AUC: {selected}")
+
+    method, briers = choose_calibration(base, X_train, y_train)
+
+    oof_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE + 1)
+    oof_pd = cross_val_predict(
+        make_calibrated(base, method), X_train, y_train, cv=oof_cv, method="predict_proba"
+    )[:, 1]
+    threshold = choose_threshold(y_train, oof_pd)
+
+    model = make_calibrated(base, method).fit(X_train, y_train)
+    explain_model = clone(base).fit(X_train, y_train)
+
+    pd_test = model.predict_proba(X_test)[:, 1]
+    auc = roc_auc_score(y_test, pd_test)
+    decline = pd_test >= threshold
+    test_metrics = {
+        "auc_roc": float(auc),
+        "gini": float(2 * auc - 1),
+        "ks": ks_statistic(y_test, pd_test),
+        "brier": float(brier_score_loss(y_test, pd_test)),
+        "brier_base_rate": float(brier_score_loss(y_test, np.full(len(y_test), y_train.mean()))),
+        "threshold": threshold,
+        "approval_rate": float(1 - decline.mean()),
+        "default_rate_approved": float(y_test[~decline].mean()),
+        "cost_model": expected_cost(y_test, pd_test, threshold),
+        "cost_approve_all": expected_cost(y_test, pd_test, 1.01),
+        "cost_decline_all": expected_cost(y_test, pd_test, -0.01),
+    }
+
+    return TrainingResult(
+        cv_table=cv_table,
+        selected_model=selected,
+        calibration=method,
+        calibration_briers=briers,
+        threshold=threshold,
+        oof_pd=oof_pd,
+        model=model,
+        explain_model=explain_model,
+        X_train=X_train,
+        X_test=X_test,
+        y_train=y_train,
+        y_test=y_test,
+        test_metrics=test_metrics,
+    )
+
+
+def save_artifact(result: TrainingResult, version: str) -> Path:
+    X_all = pd.concat([result.X_train, result.X_test]).sort_index()
+    categories = {c: sorted(X_all[c].unique().tolist()) for c in CATEGORICAL_FEATURES}
     ARTIFACT_DIR.mkdir(exist_ok=True)
     joblib.dump(
         {
-            "model": model,
-            "metrics": {"auc_roc": float(auc_roc), "gini_coefficient": float(gini_coefficient)},
             "version": version,
-            "reference_frame": reference_frame,
-            "feature_columns": FEATURE_COLUMNS,
+            "model": result.model,
+            "explain_model": result.explain_model,
+            "selected_model": result.selected_model,
+            "calibration": result.calibration,
+            "threshold": result.threshold,
+            "test_metrics": result.test_metrics,
+            "categories": categories,
+            "background": result.X_train.sample(100, random_state=RANDOM_STATE),
+            "reference_frame": X_all,
         },
         MODEL_ARTIFACT_PATH,
     )
-
-    return ModelBundle(
-        model=model,
-        metrics=ModelMetrics(auc_roc=float(auc_roc), gini_coefficient=float(gini_coefficient)),
-        version=version,
-        reference_frame=reference_frame,
-    )
+    return MODEL_ARTIFACT_PATH
 
 
-def _load_serialized_model() -> ModelBundle:
-    if not MODEL_ARTIFACT_PATH.exists():
-        raise FileNotFoundError(
-            f"Model artifact not found at {MODEL_ARTIFACT_PATH}. Run train_model.py before starting the API."
-        )
-
-    artifact: Dict[str, Any] = joblib.load(MODEL_ARTIFACT_PATH)
-    metrics = ModelMetrics(
-        auc_roc=float(artifact["metrics"]["auc_roc"]),
-        gini_coefficient=float(artifact["metrics"]["gini_coefficient"]),
-    )
-    return ModelBundle(
-        model=artifact["model"],
-        metrics=metrics,
-        version=str(artifact["version"]),
-        reference_frame=artifact["reference_frame"],
-    )
+# ---------------------------------------------------------------- serving
 
 
-def _normalize_label(value: str) -> str:
-    cleaned = value.strip().lower()
-    cleaned = cleaned.replace("years", "yrs").replace("year", "yr")
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    return cleaned
+class CategoryValidationError(ValueError):
+    def __init__(self, field_name: str, value: str, allowed: list[str]):
+        super().__init__(f"Unknown value {value!r} for {field_name}")
+        self.field = field_name
+        self.value = value
+        self.allowed = allowed
 
 
-def get_allowed_request_categories() -> dict[str, list[str]]:
-    bundle = _get_bundle()
-    preprocessor = bundle.model.named_steps["preprocessor"]
-    cat_pipeline = preprocessor.named_transformers_["cat"]
-    onehot = cat_pipeline.named_steps["onehot"]
-    categories = onehot.categories_
-
-    out: dict[str, list[str]] = {}
-    for idx, field in enumerate(["purpose", "credit_history", "employment_duration", "loan_purpose"]):
-        if field in REQUEST_CATEGORY_FIELDS:
-            out[field] = sorted(str(value) for value in categories[idx])
-    return out
+_ARTIFACT: dict[str, Any] | None = None
 
 
-def validate_and_normalize_categories(payload: Dict[str, float | str]) -> Dict[str, float | str]:
-    normalized = dict(payload)
-    allowed_map = get_allowed_request_categories()
-
-    for field in REQUEST_CATEGORY_FIELDS:
-        raw_value = str(normalized.get(field, "")).strip()
-        allowed_values = allowed_map[field]
-        allowed_by_normalized = {_normalize_label(value): value for value in allowed_values}
-
-        raw_key = _normalize_label(raw_value)
-        if raw_value in allowed_values:
-            normalized[field] = raw_value
-            continue
-
-        if raw_key in allowed_by_normalized:
-            normalized[field] = allowed_by_normalized[raw_key]
-            continue
-
-        alias_value = _CATEGORY_ALIASES.get(field, {}).get(raw_value, raw_value)
-        alias_key = _normalize_label(alias_value)
-        if alias_value in allowed_values:
-            normalized[field] = alias_value
-            continue
-
-        if alias_key in allowed_by_normalized:
-            normalized[field] = allowed_by_normalized[alias_key]
-            continue
-
-        raise CategoryValidationError(field=field, value=raw_value, allowed=allowed_values)
-
-    return normalized
-
-
-_BUNDLE: ModelBundle | None = None
-
-
-
-def _get_bundle() -> ModelBundle:
-    global _BUNDLE
-    if _BUNDLE is None:
-        _BUNDLE = _load_serialized_model()
-    return _BUNDLE
-
-
-def get_model_metrics() -> ModelMetrics:
-    return _get_bundle().metrics
-
-
-def get_model_version() -> str:
-    return _get_bundle().version
-
-
-def predict_risk(payload: Dict[str, float]) -> RiskPrediction:
-    base = pd.DataFrame([payload])
-    for col, default in {
-        "purpose": "furniture/equipment",
-        "credit_history": "existing paid",
-        "employment_duration": "1 <= ... < 4 yrs",
-    }.items():
-        if col not in base:
-            base[col] = default
-
-    features = _feature_engineering(base)[FEATURE_COLUMNS]
-    bundle = _get_bundle()
-    preprocessor = bundle.model.named_steps["preprocessor"]
-    transformed = preprocessor.transform(features)
-    nnz = int(getattr(transformed, "nnz", np.count_nonzero(transformed)))
-    feature_names = preprocessor.get_feature_names_out()
-    preview = transformed[0]
-    if hasattr(preview, "toarray"):
-        preview = preview.toarray()[0]
-    preview_array = np.asarray(preview).ravel()
-    LOGGER.debug(
-        "Transformed feature matrix before classifier | shape=%s nnz=%s top_features=%s",
-        getattr(transformed, "shape", None),
-        nnz,
-        dict(
-            zip(
-                feature_names[: min(10, len(feature_names))],
-                [float(v) for v in preview_array[: min(10, len(preview_array))]],
+def load_artifact() -> dict[str, Any]:
+    global _ARTIFACT
+    if _ARTIFACT is None:
+        if not MODEL_ARTIFACT_PATH.exists():
+            raise FileNotFoundError(
+                f"Model artifact not found at {MODEL_ARTIFACT_PATH}. Run `python train_model.py` first."
             )
-        ),
-    )
-
-    classifier = bundle.model.named_steps["classifier"]
-    prob_good = float(classifier.predict_proba(transformed)[0][1])
-    probability_default = 1 - prob_good
-
-    # Conservative monotonic adjustment: higher income should generally reduce
-    # default risk, even though income is not a feature the model is trained on
-    # directly (it is proxied via dti_ratio). Bounded to avoid distorting the
-    # underlying model output.
-    income = float(base.get("income", pd.Series([4000.0])).iloc[0])
-    income_adjustment = np.clip(4000.0 / max(income, 1.0), 0.7, 1.6)
-    probability_default = float(np.clip(probability_default * income_adjustment, 0.0, 1.0))
-
-    predicted_default = probability_default >= 0.5
-
-    if probability_default > 0.6:
-        risk_band = "high"
-    elif probability_default > 0.3:
-        risk_band = "medium"
-    else:
-        risk_band = "low"
-
-    return RiskPrediction(
-        probability_default=probability_default,
-        predicted_default=predicted_default,
-        risk_band=risk_band,
-    )
+        _ARTIFACT = joblib.load(MODEL_ARTIFACT_PATH)
+    return _ARTIFACT
 
 
-def explain_user_risk(user_id: int, top_k: int = 3) -> dict[str, list[dict[str, float | str]]]:
-    bundle = _get_bundle()
-    frame = bundle.reference_frame
-    row = frame.loc[frame["user_id"] == user_id]
-    if row.empty:
-        raise ValueError(f"Unknown user_id={user_id}")
+def validate_categories(payload: dict[str, Any]) -> None:
+    allowed = load_artifact()["categories"]
+    for col in CATEGORICAL_FEATURES:
+        if payload[col] not in allowed[col]:
+            raise CategoryValidationError(col, str(payload[col]), allowed[col])
 
-    sample = row[FEATURE_COLUMNS]
-    preprocessor = bundle.model.named_steps["preprocessor"]
-    classifier = bundle.model.named_steps["classifier"]
 
-    transformed_sample = preprocessor.transform(sample)
-
-    explainer = shap.TreeExplainer(classifier)
-    shap_values = explainer.shap_values(transformed_sample)
-
-    if isinstance(shap_values, list):
-        shap_row = np.asarray(shap_values[1][0])
-    else:
-        shap_row = np.asarray(shap_values[0])
-
-    feature_names = preprocessor.get_feature_names_out()
-    contributions = pd.DataFrame({"feature": feature_names, "shap_value": shap_row})
-
-    top_positive = (
-        contributions.sort_values("shap_value", ascending=False)
-        .head(top_k)
-        .to_dict(orient="records")
-    )
-    top_negative = (
-        contributions.sort_values("shap_value", ascending=True)
-        .head(top_k)
-        .to_dict(orient="records")
-    )
-
+def predict(payload: dict[str, Any]) -> dict[str, Any]:
+    validate_categories(payload)
+    art = load_artifact()
+    frame = add_features(pd.DataFrame([payload]))[FEATURE_COLUMNS]
+    pd_value = float(art["model"].predict_proba(frame)[0, 1])
+    decline = pd_value >= art["threshold"]
     return {
-        "top_positive": [
-            {"feature": str(item["feature"]), "shap_value": float(item["shap_value"])} for item in top_positive
-        ],
-        "top_negative": [
-            {"feature": str(item["feature"]), "shap_value": float(item["shap_value"])} for item in top_negative
-        ],
+        "probability_default": pd_value,
+        "rating_grade": rating_grade(pd_value),
+        "decision": "decline" if decline else "approve",
+        "decision_threshold": art["threshold"],
     }
 
 
-def load_modeling_frame() -> pd.DataFrame:
-    return _feature_engineering(_load_german_credit_dataset())
+def readable_feature_name(raw: str) -> str:
+    kind, _, name = raw.partition("__")
+    if kind == "cat":
+        for col in CATEGORICAL_FEATURES:
+            if name.startswith(col + "_"):
+                return f"{col} = {name[len(col) + 1:]}"
+    return name
+
+
+def _shap_values(frame: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
+    import shap
+
+    art = load_artifact()
+    pipe: Pipeline = art["explain_model"]
+    prep, clf = pipe.named_steps["prep"], pipe.named_steps["clf"]
+    x = prep.transform(frame)
+    names = [readable_feature_name(n) for n in prep.get_feature_names_out()]
+    if isinstance(clf, LogisticRegression):
+        background = prep.transform(art["background"])
+        explainer = shap.LinearExplainer(clf, background)
+        values = explainer.shap_values(x)
+    else:
+        values = shap.TreeExplainer(clf).shap_values(x)
+        if isinstance(values, list):
+            values = values[1]
+        values = np.asarray(values)
+        if values.ndim == 3:
+            values = values[:, :, 1]
+    return np.asarray(values), names
+
+
+def explain(user_id: int, top_k: int = 3) -> dict[str, list[dict[str, float | str]]]:
+    """Top risk-increasing and risk-reducing SHAP contributions (log-odds of default)."""
+    frame = load_artifact()["reference_frame"]
+    if user_id not in frame.index:
+        raise ValueError(f"Unknown user_id={user_id}")
+    row = frame.loc[[user_id]]
+    values, names = _shap_values(row)
+    onehot = load_artifact()["explain_model"].named_steps["prep"].transform(row)[0]
+    # A one-hot column that is 0 for this applicant contributes through its absence.
+    names = [n.replace(" = ", " ≠ ") if " = " in n and onehot[i] == 0 else n for i, n in enumerate(names)]
+    contrib = pd.DataFrame({"feature": names, "shap_value": values[0]})
+    contrib = contrib[contrib["shap_value"].abs() > 1e-9]
+    up = contrib.sort_values("shap_value", ascending=False).head(top_k)
+    down = contrib.sort_values("shap_value").head(top_k)
+    to_list = lambda d: [{"feature": r.feature, "shap_value": float(r.shap_value)} for r in d.itertuples()]
+    return {"risk_increasing": to_list(up), "risk_reducing": to_list(down)}

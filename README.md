@@ -1,304 +1,146 @@
-# Retail Credit Risk Probability of Default Scoring Service
+# Retail Credit Risk: Calibrated Probability-of-Default Scoring Service
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![CI](https://github.com/franzdafka/credit-risk-analysis/actions/workflows/ci.yml/badge.svg)
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
-![XGBoost](https://img.shields.io/badge/XGBoost-FF6B00)
-![SHAP](https://img.shields.io/badge/SHAP-FF6B6B)
-![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 
-A production-oriented implementation of a retail credit probability-of-default (PD) scoring service. The project benchmarks four classification algorithms on the Statlog (German Credit) dataset, selects XGBoost on the basis of held-out test performance, and serves PD estimates through a FastAPI interface together with per-applicant SHAP explanations. Outputs are structured to support the Expected Loss framework under the Basel III Internal Ratings-Based (IRB) approach: EL = PD x LGD x EAD.
+A probability-of-default (PD) model for retail loans on the Statlog (German Credit) dataset, served as a FastAPI service with SHAP explanations. The focus is on the parts that matter when a PD is used for decisions: honest model selection, calibrated probabilities, and a decision threshold set by an explicit cost function.
 
-## Table of Contents
+## TL;DR
 
-- [Model Performance](#model-performance)
-- [SHAP Feature Importance](#shap-feature-importance)
-- [Business Interpretation of SHAP Features](#business-interpretation-of-shap-features)
-- [Cost-Sensitive Threshold Optimisation](#cost-sensitive-threshold-optimisation)
-- [Project Structure](#project-structure)
-- [API Specification](#api-specification)
-- [Feature Engineering](#feature-engineering)
-- [Quick Start](#quick-start)
-- [Testing](#testing)
-- [Methodology](#methodology)
-- [Limitations](#limitations)
-- [References](#references)
+- **Model selected by cross-validation, not by the test set.** Four models were compared by repeated 5-fold CV AUC on the training data. Random Forest ranked first (0.797), but the top three are within one standard deviation of each other.
+- **Calibrated PDs.** Platt scaling was selected by out-of-fold Brier score. On the held-out test set, the Brier score is **0.154**, versus 0.210 for predicting the base rate.
+- **Cost-based decisions.** With the Statlog cost matrix (approving a defaulter costs 5, declining a good borrower costs 1), the threshold chosen on training data is PD ≥ 0.13. On the test set this cuts expected cost by **21%** against the best trivial policy (declining everyone), while approving 30% of applicants.
+- **Test set used once**: AUC **0.807**, Gini 0.61, KS 0.51.
 
-## Model Performance
+## Results
 
-The model is trained on the Statlog (German Credit) dataset (Hofmann, 1994). The data comprise 1 000 obligors and 21 raw attributes with an approximate 70/30 good/bad risk split.
+All numbers come from `python train_model.py`, which writes [`reports/metrics.json`](reports/metrics.json) and the figures below. Stratified 80/20 split, 1,000 obligors, 30% default rate.
 
-| Model                | AUC-ROC (5-fold CV) | AUC-ROC (test set) | KS Statistic |
-|----------------------|---------------------|--------------------|--------------|
-| Logistic Regression  | 0.780               | 0.776              | —            |
-| Random Forest        | 0.784               | 0.780              | —            |
-| Gradient Boosting    | 0.762               | 0.783              | —            |
-| XGBoost (selected)   | 0.766               | 0.787              | 0.462        |
+### 1. Model selection (training set only)
 
-Gini coefficient of the selected XGBoost model: 0.574.
+| Model | CV AUC (mean ± sd, 5-fold × 3 repeats) |
+|---|---|
+| **Random Forest (selected)** | **0.797 ± 0.032** |
+| XGBoost | 0.795 ± 0.028 |
+| Gradient Boosting | 0.791 ± 0.030 |
+| Logistic Regression | 0.779 ± 0.044 |
 
-KS statistic of the selected XGBoost model: 0.462.
+![CV AUC](docs/cv_auc_comparison.png)
 
-The KS statistic of 0.462 falls in the good range (0.40–0.60), indicating strong separation between the predicted probability distributions of good and bad applicants. This confirms that the model ranks defaulters and non-defaulters effectively on the held-out test data.
+With only 800 training rows, the differences are not significant. A logistic regression scorecard would be a defensible choice too, and easier to explain to a regulator. The test set was not used for this choice.
 
-![ROC Curves](docs/roc_curves.png)
+### 2. Calibration
 
-![KS Curve](docs/ks_curve.png)
+A PD of 20% should mean that about 20% of such borrowers default. Raw Random Forest scores are compressed towards the middle. Platt (sigmoid) scaling had the lowest out-of-fold Brier score (0.1614, versus 0.1620 for isotonic and 0.1668 uncalibrated).
 
-### Model Selection Rationale
+![Calibration](docs/calibration.png)
 
-On 5-fold cross-validation, Random Forest and Logistic Regression record marginally higher AUC than XGBoost. The differences lie within overlapping confidence intervals and are not statistically distinguishable on CV alone. XGBoost is selected because it attains the highest test-set AUC (0.787). Test-set performance is regarded as the more reliable indicator of generalisation performance for this sample size.
+### 3. Decision threshold
 
-![Cross-Validation AUC Comparison](docs/cv_auc_comparison.png)
+Approve if PD < t. Under the 5:1 cost matrix, the theoretical optimum for perfectly calibrated PDs is t = 1/(1+5) ≈ 0.167. The threshold minimising cost on out-of-fold training predictions is **0.13**, close to that value.
 
-## SHAP Feature Importance
+![Threshold](docs/threshold_optimization.png)
 
-Global mean absolute SHAP values identify the following variables as the strongest drivers of predicted probability of default:
+Results on the held-out test set:
 
-- cat__status_no checking account (strongest)
-- cat__status_... < 100 DM
-- num__installment_rate
-- num__duration
-- cat__purpose_car (new)
-- cat__savings_... < 100 DM
-- cat__housing_own
+| Policy | Cost per applicant | Approval rate |
+|---|---|---|
+| Approve everyone | 1.500 | 100% |
+| Decline everyone | 0.700 | 0% |
+| **Model, PD < 0.13** | **0.555** | **29.5%** |
 
-These findings are consistent with standard retail credit risk practice, where checking account status and balances, repayment burden and loan duration are among the most predictive signals of default.
+Default rate among approved applicants: 8.5% (versus 30% overall).
 
-![SHAP Feature Importance](docs/shap_importance.png)
+The 5:1 ratio is the dataset's convention, not a fact about any bank, so the decision is sensitive to it:
 
-## Business Interpretation of SHAP Features
+| Cost ratio (bad approved : good declined) | Threshold | Approval rate | Saving vs best trivial policy |
+|---|---|---|---|
+| 2:1 | 0.30 | 56.5% | 42.5% |
+| 3:1 | 0.27 | 53.0% | 41.4% |
+| 5:1 | 0.13 | 29.5% | 20.7% |
+| 8:1 | 0.13 | 29.5% | 10.0% |
 
-Global mean absolute SHAP values from the model identify the following variables as the strongest drivers of predicted probability of default:
+At 5:1 or more, declining is cheap relative to a default, so the model mostly identifies a small group of very safe borrowers.
 
-- cat__status_no checking account
-- cat__status_... < 100 DM
-- num__installment_rate
-- num__duration
-- cat__purpose_car (new)
-- cat__savings_... < 100 DM
-- cat__housing_own
+> **Correction to an earlier version:** an earlier version of this README reported a "cost-optimal" threshold of about 0.01 and a cost reduction from 240 to 140. On a 200-applicant test set with 140 good borrowers, a cost of 140 is exactly the cost of declining everyone, so that "optimum" rejected every applicant. The threshold was also tuned on the test set. Both issues are fixed above.
 
-These attributions reflect observable characteristics routinely used in retail credit assessment.
+### 4. What drives the predictions
 
-**Checking account status: no checking account**
+![SHAP](docs/shap_importance.png)
 
-Absence of a checking account is the single most powerful risk-increasing factor. It indicates that the applicant has no established banking relationship with the institution and provides no observable transaction history or cash-flow behaviour. This creates significant information asymmetry and adverse selection risk. In practice, applicants in this category receive materially higher PD estimates and are more likely to be subject to manual review or stricter policy overlays.
+Checking-account status, loan duration and size, and savings dominate. Two effects run the opposite way to intuition, and the raw data confirms them:
 
-**Checking account status: ... < 100 DM**
+| Category | Default rate | n |
+|---|---|---|
+| status = no checking account | 11.7% | 394 |
+| status = ... < 100 DM | 49.3% | 274 |
+| credit_history = critical account/other credits existing | 17.1% | 293 |
+| credit_history = existing credits paid back duly till now | 31.9% | 530 |
 
-Low or minimal balances in the checking account signal limited immediate liquidity. Borrowers who maintain persistently low account balances have reduced capacity to meet even modest short-term obligations without drawing on other resources. This variable ranks highly because it captures a contemporaneous and granular indicator of financial stress that is directly relevant to repayment probability.
+"No checking account" is the *lowest*-risk status group, and a "critical account" history is *lower* risk than a clean one. The usual explanation is selection: applicants with a weak history who were still granted a loan had to pass stricter screening. This is a reminder that SHAP explains the model, not causality.
 
-**Instalment rate**
+## Project structure
 
-A higher instalment rate relative to disposable income increases the proportion of monthly cash flow already committed to debt service. When instalments represent a large share of income, the borrower has less margin to absorb income volatility, expense shocks or changes in employment status. Credit officers use this attribute to assess affordability and to determine whether the requested loan amount is sustainable.
+| File | Role |
+|---|---|
+| `credit_model.py` | Data, features, candidate models, CV selection, calibration, threshold, prediction, SHAP |
+| `report.py` | Figures in `docs/` and `reports/metrics.json` |
+| `train_model.py` | Trains, saves `artifacts/credit_risk_model.joblib`, writes the report |
+| `api.py` | FastAPI service: `/predict`, `/explain`, `/categories`, `/health` |
+| `tests/` | Model-logic tests (cost function, threshold, split) and API tests |
 
-**Loan duration**
-
-Longer loan terms extend the period over which default can materialise. All else equal, a facility with a 48-month tenor carries greater cumulative risk than one with a 12-month tenor because the borrower remains exposed to employment, health and macroeconomic events for a longer horizon. This consideration typically informs maximum tenor limits and maturity-based adjustments in pricing and capital allocation.
-
-**Purpose: car (new)**
-
-New-car financing features among the top contributors to the PD prediction. The direction of the effect often reflects the presence of tangible collateral (the vehicle) and a tendency for this purpose to be associated with more stable borrower profiles. Banks commonly apply differentiated treatment by loan purpose, using it both within scorecards and in policy rules to set purpose-specific cut-offs or pricing.
-
-**Savings balance: ... < 100 DM**
-
-Very low savings balances indicate limited accumulated reserves available to cushion against unexpected events. Applicants with minimal savings have lower financial resilience and are more vulnerable to temporary income shortfalls. This factor is particularly material for unsecured lending products where recovery relies primarily on the borrower's ongoing repayment capacity rather than collateral.
-
-**Housing status: own**
-
-Home ownership is typically a protective factor. Ownership is associated with greater financial stability, wealth accumulation and a lower propensity for mobility-related or strategic default. In credit decisioning, home ownership often supports more favourable risk assessment, both through the model output and through explicit policy treatment that may permit higher loan-to-value ratios or improved pricing for qualifying applicants.
-
-These SHAP attributions enable individual credit decisions to be explained to model risk management, internal audit and, where relevant, to applicants in terms of standard retail lending variables. They also support ongoing model monitoring and the identification of segments where policy overlays may be warranted.
-
-## Cost-Sensitive Threshold Optimisation
-
-Conventional classification metrics assume symmetric misclassification costs and a default decision threshold of 0.5. In credit underwriting the economic cost of approving a borrower who subsequently defaults materially exceeds the opportunity cost of declining a creditworthy applicant. Using an illustrative 5:1 cost ratio (false negative cost five times false positive cost), the cost-minimising threshold for the XGBoost model declines to approximately 0.01. Total misclassification cost falls from 240 to 140, a reduction of 42 percent.
-
-This result illustrates why credit risk models should be calibrated and evaluated against explicit business loss functions rather than statistical accuracy metrics alone.
-
-![Threshold Optimisation](docs/threshold_optimization.png)
-
-## Project Structure
-
-| File                  | Role |
-|-----------------------|------|
-| credit_model.py       | Core modelling logic, feature engineering, SHAP inference and serialisation |
-| api.py                | FastAPI service exposing /predict, /explain and /health |
-| train_model.py        | Training entry point; writes model artefact to artifacts/ |
-| eda.py                | Exploratory data analysis |
-| model_benchmark.py    | Model comparison across Logistic Regression, Random Forest, Gradient Boosting and XGBoost |
-| analyse.py            | Supplementary analysis scripts |
-| analysis.ipynb        | End-to-end notebook covering EDA, benchmarking, SHAP and threshold optimisation |
-| tests/test_api.py     | API smoke, validation and monotonicity tests |
-| artifacts/            | Serialised model bundle (joblib) |
-
-The current implementation employs a curated subset of the original German Credit variables. This choice improves transparency and reduces the risk of including unstable or sparsely populated predictors while retaining the most economically relevant signals.
-
-## API Specification
-
-### POST /predict
-
-Returns a point-in-time PD estimate, an internal risk band and an indicative underwriting decision.
-
-Example request:
+## Quick start
 
 ```bash
-curl -X POST "http://localhost:8000/predict" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "duration": 24,
-    "amount": 5000,
-    "age": 35,
-    "installment_rate": 2,
-    "number_credits": 1,
-    "people_liable": 1,
-    "purpose": "car",
-    "credit_history": "existing paid",
-    "employment_duration": "1 <= ... < 4 yrs"
-  }'
-```
-
-Example response:
-
-```json
-{
-  "probability_default": 0.174,
-  "predicted_default": false,
-  "rating_grade": "low",
-  "underwriting_decision": "approve"
-}
-```
-
-### GET /explain?user_id=<id>
-
-Returns the top three risk-increasing and top three risk-reducing SHAP contributions for a reference applicant. Attributions are computed with TreeSHAP on the fitted XGBoost pipeline.
-
-Example:
-
-```bash
-curl "http://localhost:8000/explain?user_id=42"
-```
-
-Example response (feature names reflect the fitted ColumnTransformer):
-
-```json
-{
-  "top_positive": [
-    { "feature": "num__duration", "shap_value": 0.48 },
-    { "feature": "cat__credit_history_critical account/other credits existing", "shap_value": 0.31 }
-  ],
-  "top_negative": [
-    { "feature": "cat__employment_duration_4 <= ... < 7 years", "shap_value": -0.14 }
-  ]
-}
-```
-
-### GET /health
-
-```json
-{
-  "status": "ok",
-  "model_version": "credit-risk-20260621182137"
-}
-```
-
-Interactive API documentation is available at http://localhost:8000/docs.
-
-## Feature Engineering
-
-The modelling pipeline applies the following transformations to the raw data:
-
-| Feature                  | Description |
-|--------------------------|-------------|
-| dti_ratio                | Loan amount divided by a proxy for disposable income constructed from installment_rate and employment_length |
-| credit_history_length    | Age-based proxy for length of credit history, adjusted by loan duration |
-| number_of_delinquencies  | Binary indicator derived from text fields indicating past delays or critical status |
-| employment_length        | Ordinal mapping of employment duration bands into approximate years |
-| loan_purpose             | Passthrough of purpose for one-hot encoding |
-
-All numeric features are median-imputed and standardised; categorical features are mode-imputed and one-hot encoded.
-
-## Quick Start
-
-### 1. Environment
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 2. Train the model
-
-```bash
-python3 train_model.py
-```
-
-The command fits the pipeline on the training partition, evaluates on the hold-out set and writes the serialised artefact to `artifacts/credit_risk_model.joblib`.
-
-### 3. Start the service
-
-```bash
-uvicorn api:app --reload --port 8000
-```
-
-### 4. Verify with curl
-
-Health check:
-
-```bash
-curl http://localhost:8000/health
-```
-
-Score an applicant:
-
-```bash
-curl -X POST "http://localhost:8000/predict" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "duration": 36,
-    "amount": 8000,
-    "age": 42,
-    "installment_rate": 3,
-    "number_credits": 2,
-    "people_liable": 1,
-    "purpose": "furniture/equipment",
-    "credit_history": "existing paid",
-    "employment_duration": ">= 7 yrs"
-  }'
-```
-
-Retrieve explanation for a reference observation:
-
-```bash
-curl "http://localhost:8000/explain?user_id=0"
-```
-
-## Testing
-
-```bash
+python train_model.py          # ~2 min: CV, calibration, figures
+uvicorn api:app --port 8000    # docs at http://localhost:8000/docs
 pytest
 ```
 
-The test suite validates endpoint responses, input sanitisation and a basic monotonicity property (higher inferred income should not materially increase predicted PD).
+Or with Docker:
 
-## Methodology
+```bash
+docker build -t credit-risk . && docker run -p 8000:8000 credit-risk
+```
 
-- Validation: stratified 80/20 train/test split; 5-fold cross-validation for model comparison.
-- Primary metric: Area Under the Receiver Operating Characteristic Curve (AUC-ROC). Gini coefficient reported as 2 x AUC - 1. KS statistic (via `scipy.stats.ks_2samp`) reported as the maximum separation between the empirical CDFs of predicted probabilities for the good and bad classes.
-- Explainability: TreeSHAP applied to the final XGBoost classifier for both local and global attributions.
-- Decision threshold: optimised explicitly under an asymmetric cost function rather than using the conventional 0.5 cutoff.
+## API
+
+`POST /predict` takes the 20 Statlog attributes. `GET /categories` lists the allowed labels for each categorical field.
+
+```bash
+curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{
+  "status": "... < 100 DM", "duration": 6, "credit_history": "critical account/other credits existing",
+  "purpose": "domestic appliances", "amount": 1169, "savings": "unknown/no savings account",
+  "employment_duration": "... >= 7 years", "installment_rate": 4, "personal_status_sex": "male : single",
+  "other_debtors": "none", "present_residence": 4, "property": "real estate", "age": 67,
+  "other_installment_plans": "none", "housing": "own", "number_credits": 2,
+  "job": "skilled employee/official", "people_liable": 1, "telephone": "yes", "foreign_worker": "yes"
+}'
+```
+
+```json
+{"probability_default": 0.074, "rating_grade": "B", "decision": "approve", "decision_threshold": 0.13}
+```
+
+`GET /explain?user_id=0` returns the three largest risk-increasing and risk-reducing SHAP contributions for an applicant in the dataset. A label like `status ≠ no checking account` means that the applicant does *not* have that attribute, and its absence raises the PD.
+
+Rating grades on the calibrated PD: A < 5%, B 5–10%, C 10–20%, D 20–35%, E ≥ 35%.
 
 ## Limitations
 
-- Sample size is modest (1 000 observations). Cross-validation intervals are consequently wide and model rankings should be treated with appropriate caution.
-- Income is not directly observed and is proxied from installment rate and employment duration.
-- The model contains no macroeconomic or point-in-time factors and therefore produces through-the-cycle rather than point-in-time PD estimates.
-- No automated monitoring of Population Stability Index (PSI) or characteristic drift is implemented.
-- The 5:1 cost ratio used for threshold optimisation is illustrative. A production implementation would calibrate loss-given-default and lost-revenue parameters to the bank's actual portfolio experience.
-- The service constitutes a proof-of-concept and has not been independently validated for regulatory capital purposes.
+- 1,000 observations from 1970s–80s Germany. The CV spread (±0.03 AUC) is as large as the gap between models.
+- PDs are through-the-cycle: there are no macroeconomic variables and no time dimension, so there is no out-of-time validation.
+- The cost matrix is illustrative. A real one would come from LGD, EAD and the margin lost on declined borrowers.
+- Sensitive attributes (`personal_status_sex`, `foreign_worker`, `age`) are kept to stay comparable with the literature. A production model would need a fairness review and would likely drop them.
+- No drift monitoring (e.g. PSI) is implemented.
 
 ## References
 
-- Hofmann, H. (1994). Statlog (German Credit Data). UCI Machine Learning Repository.
-- Basel Committee on Banking Supervision (2017). Basel III: Finalising post-crisis reforms.
+- Hofmann, H. (1994). *Statlog (German Credit Data)*. UCI Machine Learning Repository.
+- Platt, J. (1999). Probabilistic outputs for support vector machines.
+- Lundberg, S. & Lee, S.-I. (2017). A unified approach to interpreting model predictions (SHAP).
+- Basel Committee on Banking Supervision (2017). *Basel III: Finalising post-crisis reforms.*

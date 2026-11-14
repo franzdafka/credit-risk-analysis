@@ -9,21 +9,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
+          python-version: "3.13"
+          cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt
-
       - name: Train model artifact
-        run: python train_model.py
-
+        run: python train_model.py --no-report
       - name: Run tests
-        run: pytest tests/ -v
-        
+        run: pytest -v
